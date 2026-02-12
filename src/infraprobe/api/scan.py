@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 
 from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, validate_target
 from infraprobe.config import settings
-from infraprobe.models import CheckResult, CheckType, ScanRequest, ScanResponse, TargetResult
+from infraprobe.models import CheckResult, CheckType, ScanRequest, ScanResponse, SingleCheckRequest, TargetResult
 from infraprobe.scoring import calculate_score
 
 router = APIRouter()
@@ -88,3 +88,15 @@ async def scan(request: ScanRequest) -> ScanResponse:
     target_results = await asyncio.gather(*[_scan_target(t, request.checks) for t in validated])
 
     return ScanResponse(results=list(target_results))
+
+
+@router.post("/check/{check_type}")
+async def single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
+    try:
+        target = validate_target(request.target)
+    except BlockedTargetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except InvalidTargetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    return await _scan_target(target, [check_type])

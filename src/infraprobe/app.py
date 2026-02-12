@@ -25,9 +25,6 @@ register_scanner(CheckType.TECH_DEEP, tech_deep.scan)
 # Register routes with /v1 prefix
 app.include_router(scan_router, prefix="/v1")
 
-# Keep unversioned routes for backwards compatibility
-app.include_router(scan_router)
-
 
 @app.get("/health")
 async def health() -> dict[str, str]:

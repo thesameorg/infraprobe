@@ -47,6 +47,10 @@ class CheckResult(BaseModel):
     error: str | None = None
 
 
+class SingleCheckRequest(BaseModel):
+    target: str
+
+
 class ScanRequest(BaseModel):
     targets: list[str] = Field(min_length=1, max_length=10)
     checks: list[CheckType] = Field(default_factory=lambda: list(LIGHT_CHECKS))

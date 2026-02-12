@@ -5,7 +5,7 @@ import pytest
 
 def test_scan_headers_vulnweb(client):
     """Scan deliberately vulnerable site — should find missing security headers + info leaks."""
-    resp = client.post("/scan", json={"targets": ["testphp.vulnweb.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["testphp.vulnweb.com"], "checks": ["headers"]})
     assert resp.status_code == 200
 
     data = resp.json()
@@ -26,31 +26,31 @@ def test_scan_headers_vulnweb(client):
 
 
 def test_scan_blocked_ip(client):
-    resp = client.post("/scan", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
     assert resp.status_code == 400
     assert "blocked" in resp.json()["detail"].lower()
 
 
 def test_scan_invalid_target(client):
-    resp = client.post("/scan", json={"targets": ["this-does-not-exist-xyz987.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["this-does-not-exist-xyz987.com"], "checks": ["headers"]})
     assert resp.status_code == 422
 
 
 def test_scan_empty_targets(client):
-    resp = client.post("/scan", json={"targets": [], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": [], "checks": ["headers"]})
     assert resp.status_code == 422
 
 
 def test_scan_invalid_check_type(client):
     """Requesting an unknown check type should return 422."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["nonexistent"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["nonexistent"]})
     assert resp.status_code == 422
 
 
 @pytest.mark.slow
 def test_scan_example_com(client):
     """Scan example.com (behind Cloudflare) — different profile than vulnweb."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
     assert resp.status_code == 200
     result = resp.json()["results"][0]
     assert result["score"] is not None
@@ -62,7 +62,7 @@ def test_scan_example_com(client):
 
 def test_scan_ssl_valid_cert(client):
     """Scan a site with a valid TLS certificate — should have no critical/high findings."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["ssl"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["ssl"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -88,7 +88,7 @@ def test_scan_ssl_valid_cert(client):
 
 def test_scan_ssl_google(client):
     """Scan google.com — cert data should be present in raw."""
-    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["ssl"]})
+    resp = client.post("/v1/scan", json={"targets": ["google.com"], "checks": ["ssl"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -105,7 +105,7 @@ def test_scan_ssl_google(client):
 
 def test_scan_ssl_combined(client):
     """Scan with both headers and SSL checks — both results should be present."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["headers", "ssl"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers", "ssl"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -117,7 +117,7 @@ def test_scan_ssl_combined(client):
 
 def test_scan_ssl_no_tls(client):
     """Scan a target on port 80 (no TLS) — should return a graceful error."""
-    resp = client.post("/scan", json={"targets": ["example.com:80"], "checks": ["ssl"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com:80"], "checks": ["ssl"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -131,7 +131,7 @@ def test_scan_ssl_no_tls(client):
 
 def test_scan_dns_google(client):
     """Scan google.com DNS — should resolve records and return raw data."""
-    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["dns"]})
+    resp = client.post("/v1/scan", json={"targets": ["google.com"], "checks": ["dns"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -150,7 +150,7 @@ def test_scan_dns_google(client):
 
 def test_scan_dns_spf_dmarc(client):
     """Scan google.com DNS — should have SPF and DMARC (no findings for missing)."""
-    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["dns"]})
+    resp = client.post("/v1/scan", json={"targets": ["google.com"], "checks": ["dns"]})
     assert resp.status_code == 200
 
     dns_result = resp.json()["results"][0]["results"]["dns"]
@@ -171,7 +171,7 @@ def test_scan_dns_spf_dmarc(client):
 
 def test_scan_dns_combined(client):
     """Scan with DNS + headers — both results should be present."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["dns", "headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["dns", "headers"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -183,7 +183,7 @@ def test_scan_dns_combined(client):
 
 def test_scan_dns_strips_port(client):
     """DNS scanner should ignore port in target."""
-    resp = client.post("/scan", json={"targets": ["google.com:443"], "checks": ["dns"]})
+    resp = client.post("/v1/scan", json={"targets": ["google.com:443"], "checks": ["dns"]})
     assert resp.status_code == 200
 
     dns_result = resp.json()["results"][0]["results"]["dns"]
@@ -196,7 +196,7 @@ def test_scan_dns_strips_port(client):
 
 def test_scan_tech_vulnweb(client):
     """Scan vulnweb — should detect server tech (Nginx/PHP)."""
-    resp = client.post("/scan", json={"targets": ["testphp.vulnweb.com"], "checks": ["tech"]})
+    resp = client.post("/v1/scan", json={"targets": ["testphp.vulnweb.com"], "checks": ["tech"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -212,7 +212,7 @@ def test_scan_tech_vulnweb(client):
 
 def test_scan_tech_google(client):
     """Scan google.com — should detect something (at least a web server or CDN)."""
-    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["tech"]})
+    resp = client.post("/v1/scan", json={"targets": ["google.com"], "checks": ["tech"]})
     assert resp.status_code == 200
 
     tech_result = resp.json()["results"][0]["results"]["tech"]
@@ -222,7 +222,7 @@ def test_scan_tech_google(client):
 
 def test_scan_tech_raw_structure(client):
     """Verify tech scanner raw data structure."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["tech"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["tech"]})
     assert resp.status_code == 200
 
     tech_result = resp.json()["results"][0]["results"]["tech"]
@@ -239,7 +239,7 @@ def test_scan_tech_raw_structure(client):
 def test_scan_all_checks(client):
     """Scan with all 5 check types — all results should be present."""
     resp = client.post(
-        "/scan",
+        "/v1/scan",
         json={"targets": ["example.com"], "checks": ["headers", "ssl", "dns", "tech", "blacklist"]},
     )
     assert resp.status_code == 200
@@ -255,7 +255,7 @@ def test_scan_all_checks(client):
 
 def test_scan_blacklist_google(client):
     """Scan google.com DNSBL — should resolve IP and check all lists."""
-    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["blacklist"]})
+    resp = client.post("/v1/scan", json={"targets": ["google.com"], "checks": ["blacklist"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -273,7 +273,7 @@ def test_scan_blacklist_google(client):
 
 def test_scan_blacklist_raw_structure(client):
     """Verify blacklist scanner raw data structure."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["blacklist"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["blacklist"]})
     assert resp.status_code == 200
 
     bl_result = resp.json()["results"][0]["results"]["blacklist"]
@@ -295,7 +295,7 @@ def test_scan_blacklist_raw_structure(client):
 
 
 def test_v1_scan_works(client):
-    """/v1/scan should work identically to /scan."""
+    """/v1/scan should work."""
     resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
     assert resp.status_code == 200
     result = resp.json()["results"][0]
@@ -319,7 +319,7 @@ def test_v1_default_checks_are_light(client):
 
 def test_scan_ssl_deep(client):
     """SSL deep scan (SSLyze) — should return protocol/vuln data."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["ssl_deep"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["ssl_deep"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -335,7 +335,7 @@ def test_scan_ssl_deep(client):
 
 def test_scan_dns_deep(client):
     """DNS deep scan (checkdmarc) — should return SPF/DMARC/DNSSEC data."""
-    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["dns_deep"]})
+    resp = client.post("/v1/scan", json={"targets": ["google.com"], "checks": ["dns_deep"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -354,7 +354,7 @@ def test_scan_dns_deep(client):
 
 def test_scan_tech_deep(client):
     """Tech deep scan (wappalyzer) — should detect technologies."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["tech_deep"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["tech_deep"]})
     assert resp.status_code == 200
 
     result = resp.json()["results"][0]
@@ -365,3 +365,60 @@ def test_scan_tech_deep(client):
     assert "detected" in raw
     assert "technologies_count" in raw
     assert isinstance(raw["detected"], list)
+
+
+# --- Single-check endpoint tests ---
+
+
+def test_check_headers(client):
+    """POST /v1/check/headers — returns a single TargetResult."""
+    resp = client.post("/v1/check/headers", json={"target": "example.com"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["target"] == "example.com"
+    assert data["score"] is not None
+    assert "headers" in data["results"]
+    assert data["results"]["headers"]["error"] is None
+    assert data["duration_ms"] > 0
+
+
+def test_check_ssl(client):
+    """POST /v1/check/ssl — returns SSL result for a single target."""
+    resp = client.post("/v1/check/ssl", json={"target": "example.com"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["target"] == "example.com"
+    assert "ssl" in data["results"]
+    assert data["results"]["ssl"]["error"] is None
+
+
+def test_check_dns(client):
+    """POST /v1/check/dns — returns DNS result for a single target."""
+    resp = client.post("/v1/check/dns", json={"target": "google.com"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["target"] == "google.com"
+    assert "dns" in data["results"]
+    assert data["results"]["dns"]["error"] is None
+
+
+def test_check_invalid_type(client):
+    """POST /v1/check/nonexistent — should return 422."""
+    resp = client.post("/v1/check/nonexistent", json={"target": "example.com"})
+    assert resp.status_code == 422
+
+
+def test_check_blocked_target(client):
+    """POST /v1/check/headers with blocked IP — should return 400."""
+    resp = client.post("/v1/check/headers", json={"target": "127.0.0.1"})
+    assert resp.status_code == 400
+    assert "blocked" in resp.json()["detail"].lower()
+
+
+def test_unversioned_scan_removed(client):
+    """Unversioned /scan should no longer be routed — expect 404."""
+    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    assert resp.status_code == 404
