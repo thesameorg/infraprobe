@@ -1,0 +1,60 @@
+# Tech detection scanner targets
+# Tests: server software, frameworks, CMS, CDN, WAF detection from headers + HTML
+# Scanner: not yet implemented (Phase 1)
+
+targets:
+  # --- Clear server fingerprints (header-based) ---
+
+  - target: "testphp.vulnweb.com"
+    description: "nginx + PHP — both exposed in headers"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      technologies_contain:
+        - "nginx"          # Server: nginx/1.19.0
+        - "php"            # X-Powered-By: PHP/5.6.40
+      version_detected:
+        nginx: "1.19.0"
+        php: "5.6.40"
+    notes: "Both Server and X-Powered-By headers reveal exact versions."
+
+  - target: "testasp.vulnweb.com"
+    description: "IIS + ASP.NET — Microsoft stack detection"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      technologies_contain:
+        - "iis"            # Server: Microsoft-IIS/8.5
+        - "asp.net"        # X-Powered-By: ASP.NET
+      version_detected:
+        iis: "8.5"
+    notes: "Completely different stack from testphp. Good for testing diverse detection."
+
+  - target: "scanme.nmap.org"
+    description: "Apache on Ubuntu — classic LAMP indicator"
+    category: stable_public
+    expected:
+      error: null
+      technologies_contain:
+        - "apache"         # Server: Apache/2.4.7 (Ubuntu)
+      version_detected:
+        apache: "2.4.7"
+    notes: "Explicit scan permission. Server header reveals Apache version + OS."
+
+  - target: "45.33.32.156"
+    description: "scanme.nmap.org by IP — same Apache detection via IP"
+    category: ip_target
+    expected:
+      error: null
+      technologies_contain:
+        - "apache"
+    notes: "IP-only target. Verifies tech detection works without domain name."
+
+  - target: "example.com"
+    description: "Cloudflare CDN — detectable from headers and cookies"
+    category: stable_public
+    expected:
+      error: null
+      technologies_contain:
+        - "cloudflare"     # Server: cloudflare, cf-ray header, cf-cache-status
+    notes: "Behind Cloudflare. Server header + cf-* headers reveal CDN. Good WAF/CDN detection test."

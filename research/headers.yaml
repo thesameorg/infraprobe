@@ -1,0 +1,96 @@
+# Headers scanner targets
+# Tests: missing security headers, server info leaks, HTTPS vs HTTP
+
+targets:
+  # --- Intentionally vulnerable ---
+
+  - target: "testphp.vulnweb.com"
+    description: "Acunetix vulnerable PHP app — missing everything, leaks server info"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      min_findings: 5
+      finding_titles_contain:
+        - "HSTS"           # no HSTS (HIGH)
+        - "CSP"            # no CSP (MEDIUM)
+        - "server"         # Server header leak — nginx/1.19.0
+        - "X-Powered-By"   # X-Powered-By leak — PHP/5.6.40
+      severities_present:
+        - "high"
+        - "medium"
+        - "low"
+      raw_keys:
+        - "url"
+        - "status_code"
+        - "headers"
+    notes: "HTTP only (no HTTPS). Should also flag 'Site served over HTTP'."
+
+  - target: "testasp.vulnweb.com"
+    description: "Acunetix vulnerable ASP.NET app — IIS stack, different tech profile"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      min_findings: 4
+      finding_titles_contain:
+        - "HSTS"
+        - "server"         # Server: Microsoft-IIS/8.5
+        - "X-Powered-By"   # X-Powered-By: ASP.NET
+      severities_present:
+        - "high"
+        - "low"
+      raw_keys:
+        - "url"
+        - "status_code"
+    notes: "HTTP only. Good contrast with testphp — completely different server stack."
+
+  # --- Well-known stable targets ---
+
+  - target: "scanme.nmap.org"
+    description: "Nmap official scan target — Apache, no security headers at all"
+    category: stable_public
+    expected:
+      error: null
+      min_findings: 4
+      finding_titles_contain:
+        - "HSTS"
+        - "CSP"
+        - "server"          # Server: Apache/2.4.7 (Ubuntu)
+      severities_present:
+        - "high"
+        - "medium"
+        - "low"
+      raw_keys:
+        - "url"
+        - "status_code"
+    notes: "Explicit scan permission from Nmap. HTTP only."
+
+  - target: "45.33.32.156"
+    description: "scanme.nmap.org by IP — same as above but tests IP-based scanning"
+    category: ip_target
+    expected:
+      error: null
+      min_findings: 4
+      finding_titles_contain:
+        - "HSTS"
+        - "server"
+      severities_present:
+        - "high"
+        - "low"
+      raw_keys:
+        - "url"
+        - "status_code"
+    notes: "IP-only target. Verifies scanner works without a domain name."
+
+  - target: "example.com"
+    description: "IANA example domain behind Cloudflare — partial security headers"
+    category: stable_public
+    expected:
+      error: null
+      min_findings: 1   # at minimum missing some headers
+      finding_titles_contain:
+        - "CSP"           # example.com lacks CSP
+      raw_keys:
+        - "url"
+        - "status_code"
+        - "present_security_headers"
+    notes: "Behind Cloudflare. Has some security headers but not all. Good 'partial' test case."

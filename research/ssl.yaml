@@ -1,0 +1,95 @@
+# SSL/TLS scanner targets
+# Tests: expired certs, self-signed, hostname mismatch, weak ciphers, valid certs
+
+targets:
+  # --- Intentionally broken certificates (badssl.com) ---
+
+  - target: "expired.badssl.com"
+    description: "Certificate expired since 2015 — should trigger CRITICAL finding"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      min_findings: 1
+      finding_titles_contain:
+        - "expired"
+      severities_present:
+        - "critical"
+      raw_keys:
+        - "host"
+        - "port"
+        - "protocol_version"
+        - "cipher"
+        - "issuer"
+        - "not_valid_after"
+    notes: "badssl.com project by Chromium contributors. All subdomains at 104.154.89.105."
+
+  - target: "self-signed.badssl.com"
+    description: "Self-signed certificate — issuer equals subject"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      min_findings: 1
+      finding_titles_contain:
+        - "Self-signed"
+      severities_present:
+        - "medium"
+      raw_keys:
+        - "host"
+        - "issuer"
+        - "subject"
+    notes: "Issuer and subject both set to 'BadSSL'."
+
+  - target: "wrong.host.badssl.com"
+    description: "Certificate CN/SAN doesn't match hostname — hostname mismatch"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      min_findings: 1
+      finding_titles_contain:
+        - "mismatch"
+      severities_present:
+        - "high"
+      raw_keys:
+        - "host"
+        - "san"
+    notes: "Cert is for *.badssl.com which doesn't match *.host.badssl.com (sub-subdomain)."
+
+  - target: "104.154.89.105"
+    description: "badssl.com by IP — cert SAN won't match an IP address"
+    category: ip_target
+    expected:
+      error: null
+      min_findings: 1
+      finding_titles_contain:
+        - "mismatch"     # SAN has *.badssl.com, not the IP
+      severities_present:
+        - "high"
+      raw_keys:
+        - "host"
+        - "san"
+    notes: "IP-only SSL test. Certificate is for *.badssl.com, not for this IP."
+
+  # --- Valid certificate (control target) ---
+
+  - target: "example.com"
+    description: "Valid Cloudflare cert — should have zero critical/high findings"
+    category: stable_public
+    expected:
+      error: null
+      max_severity: "medium"   # no critical or high findings expected
+      raw_keys:
+        - "host"
+        - "port"
+        - "protocol_version"
+        - "cipher"
+        - "cipher_bits"
+        - "key_type"
+        - "key_bits"
+        - "days_until_expiry"
+        - "san"
+      raw_checks:
+        protocol_version_contains: "TLS"
+        cipher_bits_min: 128
+        key_bits_min: 256
+        days_until_expiry_min: 1
+    notes: "Control target. Valid cert, TLS 1.3, strong ciphers. Should score well."

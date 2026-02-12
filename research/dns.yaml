@@ -1,0 +1,102 @@
+# DNS scanner targets
+# Tests: SPF, DMARC, CAA record presence and policy strength
+# Scanner: not yet implemented (Phase 1 — next up)
+
+targets:
+  # --- Full DNS security (SPF + DMARC + CAA) ---
+
+  - target: "google.com"
+    description: "Gold standard — SPF, DMARC reject, CAA present"
+    category: stable_public
+    expected:
+      error: null
+      dns_records_present:
+        - "A"
+        - "MX"
+        - "NS"
+        - "TXT"
+      spf:
+        present: true
+        policy: "~all"     # v=spf1 include:_spf.google.com ~all
+      dmarc:
+        present: true
+        policy: "reject"   # p=reject
+      caa:
+        present: true
+        issuers_contain:
+          - "pki.goog"
+    notes: "All three email security records with strict policies. CAA restricts to Google's CA."
+
+  - target: "cloudflare.com"
+    description: "Comprehensive CAA — multiple issuers, both issue and issuewild"
+    category: stable_public
+    expected:
+      error: null
+      dns_records_present:
+        - "A"
+        - "AAAA"
+        - "MX"
+        - "NS"
+      spf:
+        present: true
+        policy: "-all"    # hard fail
+      dmarc:
+        present: true
+        policy: "reject"
+      caa:
+        present: true
+        issuers_contain:
+          - "digicert.com"
+          - "letsencrypt.org"
+          - "comodoca.com"
+          - "pki.goog"
+    notes: "Most comprehensive CAA record set. Good for testing CAA parsing with many entries."
+
+  # --- Partial DNS security (missing some records) ---
+
+  - target: "nmap.org"
+    description: "Has SPF + CAA but no DMARC — partial security"
+    category: stable_public
+    expected:
+      error: null
+      spf:
+        present: true
+        policy: "~all"    # soft fail — also uses deprecated 'ptr' mechanism
+      dmarc:
+        present: false    # MISSING — should generate a finding
+      caa:
+        present: true
+        issuers_contain:
+          - "letsencrypt.org"
+    notes: "SPF uses deprecated 'ptr' mechanism. No DMARC. Good for testing partial configs."
+
+  # --- Minimal/no DNS security ---
+
+  - target: "badssl.com"
+    description: "Zero email security — no SPF, no DMARC, no CAA"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      dns_records_present:
+        - "A"
+      spf:
+        present: false    # MISSING
+      dmarc:
+        present: false    # MISSING
+      caa:
+        present: false    # MISSING
+    notes: "Despite being a security testing site, has zero email/DNS security. Good negative test."
+
+  - target: "vulnweb.com"
+    description: "Weak SPF (allows everything), no DMARC, no CAA"
+    category: intentionally_vulnerable
+    expected:
+      error: null
+      spf:
+        present: true
+        policy: "~all"    # v=spf1 ~all — permits any sender
+      dmarc:
+        present: false    # MISSING
+      caa:
+        present: false    # MISSING
+    notes: "SPF is 'v=spf1 ~all' with no includes — effectively allows spoofing. No DMARC/CAA."
