@@ -7,6 +7,8 @@ work_docs/
 .envs/
 # C extensions
 *.so
+CLAUDE.md
+.vscode/
 
 # Distribution / packaging
 .Python
