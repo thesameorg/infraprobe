@@ -51,21 +51,33 @@ _LEAKY_HEADERS: list[tuple[str, str]] = [
 ]
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def _fetch(target: str, timeout: float) -> httpx.Response:
+    """Try HTTPS first (short connect timeout), fall back to HTTP."""
     host = target.split(":")[0] if ":" in target and not target.startswith("[") else target
-    url = f"https://{target}" if "://" not in target else target
 
-    try:
+    if "://" in target:
         async with httpx.AsyncClient(verify=False, timeout=timeout, follow_redirects=True) as client:
-            resp = await client.get(url)
+            return await client.get(target)
+
+    # Try HTTPS with a short connect timeout — don't wait 10s if port 443 isn't open
+    try:
+        connect_timeout = min(3.0, timeout)
+        timeouts = httpx.Timeout(timeout, connect=connect_timeout)
+        async with httpx.AsyncClient(verify=False, timeout=timeouts, follow_redirects=True) as client:
+            return await client.get(f"https://{target}")
+    except httpx.HTTPError:
+        pass
+
+    # Fall back to HTTP
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        return await client.get(f"http://{host}")
+
+
+async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+    try:
+        resp = await _fetch(target, timeout)
     except httpx.HTTPError as exc:
-        # Try HTTP if HTTPS fails
-        try:
-            url = f"http://{host}"
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                resp = await client.get(url)
-        except httpx.HTTPError:
-            return CheckResult(check=CheckType.HEADERS, error=f"Cannot connect to {target}: {exc}")
+        return CheckResult(check=CheckType.HEADERS, error=f"Cannot connect to {target}: {exc}")
 
     headers_lower = {k.lower(): v for k, v in resp.headers.items()}
     findings: list[Finding] = []
