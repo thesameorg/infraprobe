@@ -1,0 +1,104 @@
+# Scanner Development Guide
+
+Rules and contracts for implementing scanners. All scanner code must follow this document.
+Referenced from `CLAUDE.md`.
+
+---
+
+## Scanner Contract
+
+Every scanner is a single async function:
+
+```python
+async def scan(target: str, timeout: float) -> CheckResult
+```
+
+### Rules
+
+1. **`timeout` is a budget, not a guarantee.** Pass it to I/O calls (httpx, dns, ssl) as a hint. The orchestrator enforces the hard deadline — scanners do NOT call `asyncio.wait_for` on themselves.
+
+2. **Never hang.** Every I/O call must receive an explicit timeout derived from the `timeout` parameter. No bare `await` on network calls. No unbounded loops.
+
+3. **Never raise.** Catch all exceptions internally and return `CheckResult(check=..., error="message")`. The orchestrator has a safety net, but scanners should not rely on it.
+
+4. **Findings = problems only.** Don't create findings for "header X is present". Only report what needs attention. Use the `raw` dict for neutral/diagnostic data (response headers, cert details, DNS records).
+
+5. **Stateless.** No module-level state, no connection pools, no caches. Receive target + timeout, return result. If shared HTTP clients are needed later, they'll be injected via the function signature.
+
+6. **Deterministic check type.** Always return `CheckResult(check=CheckType.YOUR_TYPE, ...)`. The check field must match the scanner's registered type.
+
+---
+
+## Timeout Layering
+
+```
+Request timeout (uvicorn/Cloud Run: 300s)
+  └─ Orchestrator hard deadline: asyncio.wait_for(scanner, budget + GRACE)
+       └─ Scanner I/O timeout: httpx.Timeout(budget), dns timeout=budget, etc.
+```
+
+| Constant | Value | Location | Purpose |
+|----------|-------|----------|---------|
+| `settings.scanner_timeout` | `10.0s` | `config.py` | Per-scanner budget passed to `scan()` |
+| `_ORCHESTRATOR_GRACE` | `2.0s` | `api/scan.py` | Buffer for asyncio scheduling overhead |
+
+**Rules:**
+- `_run_scanner()` in `api/scan.py` is the only place that calls `asyncio.wait_for`.
+- Scanners pass the budget (or values derived from it) to their I/O libraries.
+- `TimeoutError` from `wait_for` is caught and converted to `CheckResult(error=...)`.
+- For HTTP scanners: use `connect=min(3.0, budget)` so connection failures fail fast.
+
+---
+
+## Error Handling
+
+Scanners must handle their own errors. The orchestrator provides a safety net but scanners should not depend on it.
+
+| Error type | Scanner responsibility | Orchestrator safety net |
+|------------|----------------------|------------------------|
+| Network error | Catch, return `CheckResult(error=...)` | Catches `Exception` |
+| Timeout | Pass budget to I/O calls | `wait_for` kills after budget + grace |
+| Unexpected exception | Catch broadly, return error result | Catches `Exception` |
+| Target unreachable | Return error result | N/A (scanner handles) |
+
+**Key rules:**
+- One scanner failing never blocks other scanners (`asyncio.gather` runs them independently).
+- No retry at any level. If a check fails, it fails. The client can retry the whole scan.
+- All errors land in `CheckResult.error`. Clients check `error` — if null, `findings` is valid.
+
+---
+
+## Adding a New Scanner
+
+1. Create `src/infraprobe/scanners/{name}.py`
+2. Implement `async def scan(target: str, timeout: float) -> CheckResult` following this contract
+3. Add enum value to `CheckType` in `models.py` if needed
+4. Register in `app.py`: `register_scanner(CheckType.{NAME}, {name}.scan)`
+5. Add integration test in `tests/test_scan.py` against a real target
+
+What you don't need to change:
+- `api/scan.py` — handles any registered scanner automatically
+- `scoring.py` — works on findings from any scanner
+
+---
+
+## Debugging
+
+**Scanner hangs:** Orchestrator kills it after budget + grace. Result: `CheckResult(error="Scanner X timed out after Ys")`. Root cause: an I/O call without explicit timeout.
+
+**Scanner returns error:** Check `CheckResult.error` string. Root cause: usually a parsing error on unexpected response format.
+
+**Request takes too long:** Check `duration_ms` in `TargetResult`. All scanners run in parallel, so total time ≈ slowest scanner. Validate with `INFRAPROBE_SCANNER_TIMEOUT=2`.
+
+---
+
+## What Scanners Should Not Do (YAGNI)
+
+Add these only when there is a concrete requirement:
+
+- Retry logic — adds latency, masks failures
+- Connection pooling — scanners are stateless, short-lived
+- Caching — add when same targets are scanned repeatedly
+- Scanner dependency chains — all scanners are independent
+- Per-scanner timeout config — one timeout fits all for now
+- Circuit breakers — meaningful with persistent services, not one-shot scans

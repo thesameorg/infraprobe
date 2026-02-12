@@ -55,7 +55,9 @@ docker compose up
 
 **CheckType enum defines planned scanners:** `ssl`, `headers`, `dns`, `tech` — only `headers` is implemented so far.
 
-**Architecture reference:** See `docs/architecture.md` for the canonical rules on scanner contracts, timeout handling, error propagation, concurrency, and what to exclude (YAGNI). All code changes involving scanners, timeouts, or error handling MUST follow that document.
+**Architecture reference:** See `docs/architecture.md` for system design, components, data model, concurrency, and deployment.
+
+**Scanner development:** See `docs/check_approach.md` for scanner contracts, timeout rules, error handling, and how to add new scanners. All scanner code MUST follow that document.
 
 ## Conventions
 
@@ -70,4 +72,4 @@ docker compose up
 ## CI/CD
 
 - **CI:** ruff check + ruff format --check + ty check + pytest (GitHub Actions)
-- **Deploy:** Push to main → build Docker image → push to GHCR → deploy to Google Cloud Run
+- **Deploy:** Push to main → CI passes → build Docker image → push to Artifact Registry → deploy to Google Cloud Run
