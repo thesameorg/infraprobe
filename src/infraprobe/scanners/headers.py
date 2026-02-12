@@ -1,15 +1,14 @@
-"""HTTP security headers scanner with deep directive analysis.
+"""HTTP security headers scanner — declarative rule engine.
 
-Checks for missing headers, misconfigured values (CSP directives, HSTS max-age,
-cookie attributes), and information-leaking headers. Inspired by drHEADer rules
-and OWASP Secure Headers Project recommendations.
+Rules define required/forbidden headers, severity levels, and deep validators.
+Inspired by drHEADer's rule-based approach but implemented without external deps.
 """
 
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any
+from dataclasses import dataclass
 
 import httpx
 
@@ -21,74 +20,20 @@ from infraprobe.models import CheckResult, CheckType, Finding, Severity
 
 _MIN_HSTS_MAX_AGE = 31_536_000  # 1 year (OWASP recommendation)
 
-_SAFE_REFERRER_POLICIES = frozenset(
-    {
-        "no-referrer",
-        "same-origin",
-        "strict-origin",
-        "strict-origin-when-cross-origin",
-    }
-)
+_SAFE_REFERRER_POLICIES = frozenset({"no-referrer", "same-origin", "strict-origin", "strict-origin-when-cross-origin"})
 
-_VALID_XCTO = "nosniff"
-
-_VALID_XFO = frozenset({"deny", "sameorigin"})
-
-# CSP directives that weaken the policy
-_CSP_DANGEROUS_VALUES = re.compile(
-    r"""
-    'unsafe-inline'  |
-    'unsafe-eval'    |
-    data:            |
-    \*               # wildcard source
-    """,
-    re.VERBOSE | re.IGNORECASE,
-)
-
-# CSP directives to inspect
-_CSP_DIRECTIVES_TO_CHECK = (
-    "default-src",
-    "script-src",
-    "style-src",
-    "object-src",
-    "base-uri",
-)
-
-# Headers whose mere presence leaks server information
-_LEAKY_HEADERS: list[tuple[str, str]] = [
-    ("server", "Server header exposes software version"),
-    ("x-powered-by", "X-Powered-By header exposes technology stack"),
-    ("x-aspnet-version", "X-AspNet-Version header exposes ASP.NET version"),
-    ("x-aspnetmvc-version", "X-AspNetMvc-Version header exposes ASP.NET MVC version"),
-    ("x-generator", "X-Generator header exposes site generator"),
-]
+_CSP_DANGEROUS = re.compile(r"'unsafe-inline'|'unsafe-eval'|data:|\*", re.IGNORECASE)
+_CSP_DIRECTIVES = ("default-src", "script-src", "style-src", "object-src", "base-uri")
 
 
 # ---------------------------------------------------------------------------
-# Deep-analysis helpers
+# Value validators — called only when the header IS present
 # ---------------------------------------------------------------------------
 
 
-def _parse_csp(value: str) -> dict[str, str]:
-    """Parse CSP header into {directive: sources} map."""
-    directives: dict[str, str] = {}
-    for part in value.split(";"):
-        part = part.strip()
-        if not part:
-            continue
-        tokens = part.split(None, 1)
-        directive = tokens[0].lower()
-        sources = tokens[1] if len(tokens) > 1 else ""
-        directives[directive] = sources
-    return directives
-
-
-def _check_hsts(value: str, findings: list[Finding]) -> None:
-    """Analyse Strict-Transport-Security value."""
-    value_lower = value.lower()
-
-    # Extract max-age
-    match = re.search(r"max-age\s*=\s*(\d+)", value_lower)
+def _validate_hsts(value: str, findings: list[Finding]) -> None:
+    lower = value.lower()
+    match = re.search(r"max-age\s*=\s*(\d+)", lower)
     if not match:
         findings.append(
             Finding(
@@ -113,7 +58,7 @@ def _check_hsts(value: str, findings: list[Finding]) -> None:
             )
         )
 
-    if "includesubdomains" not in value_lower:
+    if "includesubdomains" not in lower:
         findings.append(
             Finding(
                 severity=Severity.LOW,
@@ -124,9 +69,14 @@ def _check_hsts(value: str, findings: list[Finding]) -> None:
         )
 
 
-def _check_csp(value: str, findings: list[Finding]) -> None:
-    """Analyse Content-Security-Policy directives."""
-    directives = _parse_csp(value)
+def _validate_csp(value: str, findings: list[Finding]) -> None:
+    directives: dict[str, str] = {}
+    for part in value.split(";"):
+        part = part.strip()
+        if not part:
+            continue
+        tokens = part.split(None, 1)
+        directives[tokens[0].lower()] = tokens[1] if len(tokens) > 1 else ""
 
     if not directives:
         findings.append(
@@ -138,23 +88,21 @@ def _check_csp(value: str, findings: list[Finding]) -> None:
         )
         return
 
-    # Check for dangerous values in key directives
-    for directive in _CSP_DIRECTIVES_TO_CHECK:
-        sources = directives.get(directive)
+    for d in _CSP_DIRECTIVES:
+        sources = directives.get(d)
         if sources is None:
             continue
-        dangerous = _CSP_DANGEROUS_VALUES.findall(sources)
+        dangerous = _CSP_DANGEROUS.findall(sources)
         if dangerous:
             findings.append(
                 Finding(
                     severity=Severity.MEDIUM,
-                    title=f"CSP {directive} contains unsafe source",
-                    description=f"'{directive}' contains {', '.join(dangerous)} which weakens the policy.",
-                    details={"directive": directive, "sources": sources, "unsafe": dangerous},
+                    title=f"CSP {d} contains unsafe source",
+                    description=f"'{d}' contains {', '.join(dangerous)} which weakens the policy.",
+                    details={"directive": d, "sources": sources, "unsafe": dangerous},
                 )
             )
 
-    # Missing default-src (fallback for all fetch directives)
     if "default-src" not in directives:
         findings.append(
             Finding(
@@ -164,28 +112,21 @@ def _check_csp(value: str, findings: list[Finding]) -> None:
             )
         )
 
-    # Check for report-only (not enforcing)
-    # Note: report-only comes as a separate header, but some sites put it in CSP
-    # We check the actual header name in the caller
 
-
-def _check_xcto(value: str, findings: list[Finding]) -> None:
-    """Analyse X-Content-Type-Options value."""
-    if value.strip().lower() != _VALID_XCTO:
+def _validate_xcto(value: str, findings: list[Finding]) -> None:
+    if value.strip().lower() != "nosniff":
         findings.append(
             Finding(
                 severity=Severity.MEDIUM,
                 title="X-Content-Type-Options has invalid value",
                 description=f"Expected 'nosniff', got '{value.strip()}'.",
-                details={"value": value.strip(), "expected": _VALID_XCTO},
+                details={"value": value.strip(), "expected": "nosniff"},
             )
         )
 
 
-def _check_xfo(value: str, findings: list[Finding]) -> None:
-    """Analyse X-Frame-Options value."""
+def _validate_xfo(value: str, findings: list[Finding]) -> None:
     val = value.strip().lower()
-    # allow-from is deprecated and ignored by modern browsers
     if val.startswith("allow-from"):
         findings.append(
             Finding(
@@ -195,7 +136,7 @@ def _check_xfo(value: str, findings: list[Finding]) -> None:
                 details={"value": value.strip()},
             )
         )
-    elif val not in _VALID_XFO:
+    elif val not in ("deny", "sameorigin"):
         findings.append(
             Finding(
                 severity=Severity.MEDIUM,
@@ -206,9 +147,7 @@ def _check_xfo(value: str, findings: list[Finding]) -> None:
         )
 
 
-def _check_referrer_policy(value: str, findings: list[Finding]) -> None:
-    """Analyse Referrer-Policy value."""
-    # Referrer-Policy can be comma-separated (fallback list); use the last supported value
+def _validate_referrer(value: str, findings: list[Finding]) -> None:
     policies = [p.strip().lower() for p in value.split(",")]
     effective = policies[-1] if policies else ""
 
@@ -241,14 +180,213 @@ def _check_referrer_policy(value: str, findings: list[Finding]) -> None:
         )
 
 
+def _validate_cache_control(value: str, findings: list[Finding]) -> None:
+    lower = value.lower()
+    if "no-store" not in lower and "private" not in lower:
+        findings.append(
+            Finding(
+                severity=Severity.LOW,
+                title="Cache-Control allows public caching",
+                description="Without 'no-store' or 'private', responses may be cached by intermediaries.",
+                details={"value": value},
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Positive-finding condition helpers
+# ---------------------------------------------------------------------------
+
+
+def _hsts_ok(value: str) -> bool:
+    m = re.search(r"max-age\s*=\s*(\d+)", value.lower())
+    return m is not None and int(m.group(1)) >= _MIN_HSTS_MAX_AGE
+
+
+def _xcto_ok(value: str) -> bool:
+    return value.strip().lower() == "nosniff"
+
+
+# ---------------------------------------------------------------------------
+# Rule definitions
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _RequiredRule:
+    """Header that MUST be present. Optional value validation and positive finding."""
+
+    header: str
+    severity: Severity
+    title_missing: str
+    desc_missing: str
+    validate: Callable[[str, list[Finding]], None] | None = None
+    positive_title: str = ""
+    positive_desc: str = ""
+    positive_check: Callable[[str], bool] | None = None  # None → always emit positive
+
+
+_REQUIRED_RULES: tuple[_RequiredRule, ...] = (
+    _RequiredRule(
+        header="strict-transport-security",
+        severity=Severity.HIGH,
+        title_missing="HSTS not set",
+        desc_missing="Without HSTS, users can be downgraded to HTTP via man-in-the-middle attacks.",
+        validate=_validate_hsts,
+        positive_title="HSTS is properly configured",
+        positive_desc="HSTS is set with a strong max-age.",
+        positive_check=_hsts_ok,
+    ),
+    _RequiredRule(
+        header="content-security-policy",
+        severity=Severity.MEDIUM,
+        title_missing="CSP not set",
+        desc_missing="Content-Security-Policy helps prevent XSS and data injection attacks.",
+        validate=_validate_csp,
+        positive_title="Content-Security-Policy is set",
+        positive_desc="CSP header is present and enforced.",
+    ),
+    _RequiredRule(
+        header="x-content-type-options",
+        severity=Severity.MEDIUM,
+        title_missing="X-Content-Type-Options not set",
+        desc_missing="Without nosniff, browsers may MIME-sniff responses, enabling XSS via content type confusion.",
+        validate=_validate_xcto,
+        positive_title="X-Content-Type-Options is set",
+        positive_desc="nosniff is enabled, preventing MIME-type sniffing.",
+        positive_check=_xcto_ok,
+    ),
+    _RequiredRule(
+        header="x-frame-options",
+        severity=Severity.MEDIUM,
+        title_missing="X-Frame-Options not set",
+        desc_missing="Without framing protection the site is vulnerable to clickjacking.",
+        validate=_validate_xfo,
+    ),
+    _RequiredRule(
+        header="permissions-policy",
+        severity=Severity.LOW,
+        title_missing="Permissions-Policy not set",
+        desc_missing="Permissions-Policy restricts browser features (camera, microphone, geolocation).",
+        positive_title="Permissions-Policy is set",
+        positive_desc="Browser feature restrictions are configured.",
+    ),
+    _RequiredRule(
+        header="referrer-policy",
+        severity=Severity.LOW,
+        title_missing="Referrer-Policy not set",
+        desc_missing="Without Referrer-Policy, the full URL may leak to third-party sites.",
+        validate=_validate_referrer,
+    ),
+    _RequiredRule(
+        header="cache-control",
+        severity=Severity.LOW,
+        title_missing="Cache-Control not set",
+        desc_missing="Without Cache-Control, sensitive responses may be stored by intermediate caches.",
+        validate=_validate_cache_control,
+    ),
+)
+
+# Info-leak headers: presence indicates a problem
+_LEAK_HEADERS: tuple[tuple[str, str], ...] = (
+    ("server", "Server header exposes software version"),
+    ("x-powered-by", "X-Powered-By header exposes technology stack"),
+    ("x-aspnet-version", "X-AspNet-Version header exposes ASP.NET version"),
+    ("x-aspnetmvc-version", "X-AspNetMvc-Version header exposes ASP.NET MVC version"),
+    ("x-generator", "X-Generator header exposes site generator"),
+    ("x-client-ip", "X-Client-IP header leaks internal IP address"),
+    ("x-forwarded-for", "X-Forwarded-For header leaks client/proxy IP addresses"),
+)
+
+
+# ---------------------------------------------------------------------------
+# Rule engine
+# ---------------------------------------------------------------------------
+
+
+def _eval_required(headers: dict[str, str], findings: list[Finding]) -> None:
+    """Evaluate required-header rules: missing → finding, present → validate + positive."""
+    for rule in _REQUIRED_RULES:
+        value = headers.get(rule.header)
+        if value is None:
+            findings.append(Finding(severity=rule.severity, title=rule.title_missing, description=rule.desc_missing))
+            continue
+        if rule.validate:
+            rule.validate(value, findings)
+        if rule.positive_title and (rule.positive_check is None or rule.positive_check(value)):
+            findings.append(Finding(severity=Severity.INFO, title=rule.positive_title, description=rule.positive_desc))
+
+
+def _eval_leaks(headers: dict[str, str], findings: list[Finding]) -> None:
+    """Detect info-leaking headers."""
+    for header, desc in _LEAK_HEADERS:
+        value = headers.get(header)
+        if value is not None:
+            findings.append(
+                Finding(
+                    severity=Severity.LOW,
+                    title=f"{header} header leaks information",
+                    description=f"{desc}. Value: {value}",
+                    details={"header": header, "value": value},
+                )
+            )
+
+
+def _eval_xxss(headers: dict[str, str], findings: list[Finding]) -> None:
+    """X-XSS-Protection is deprecated; non-zero values can cause info leaks."""
+    value = headers.get("x-xss-protection")
+    if value is not None and value.strip() != "0":
+        findings.append(
+            Finding(
+                severity=Severity.LOW,
+                title="X-XSS-Protection is deprecated",
+                description=(
+                    f"Value '{value.strip()}' is set. Modern browsers ignore this header; use CSP instead. "
+                    "'1; mode=block' can cause information leaks in old browsers."
+                ),
+                details={"value": value.strip()},
+            )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fetch helper
+# ---------------------------------------------------------------------------
+
+
+async def _fetch(target: str, timeout: float) -> httpx.Response:
+    """Try HTTPS first (short connect timeout), fall back to HTTP."""
+    host = target.split(":")[0] if ":" in target and not target.startswith("[") else target
+
+    if "://" in target:
+        async with httpx.AsyncClient(verify=False, timeout=timeout, follow_redirects=True) as client:
+            return await client.get(target)
+
+    # Try HTTPS with a short connect timeout — don't wait 10s if port 443 isn't open
+    try:
+        connect_timeout = min(3.0, timeout)
+        timeouts = httpx.Timeout(timeout, connect=connect_timeout)
+        async with httpx.AsyncClient(verify=False, timeout=timeouts, follow_redirects=True) as client:
+            return await client.get(f"https://{target}")
+    except httpx.HTTPError:
+        pass
+
+    # Fall back to HTTP
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        return await client.get(f"http://{host}")
+
+
+# ---------------------------------------------------------------------------
+# Cookie security
+# ---------------------------------------------------------------------------
+
+
 def _check_cookies(resp: httpx.Response, findings: list[Finding]) -> None:
     """Check Set-Cookie headers for security attributes."""
     cookies = [v for k, v in resp.headers.multi_items() if k.lower() == "set-cookie"]
-
     is_https = str(resp.url).startswith("https://")
 
     for cookie_str in cookies:
-        # Extract cookie name
         name = cookie_str.split("=", 1)[0].strip()
         lower = cookie_str.lower()
 
@@ -284,86 +422,6 @@ def _check_cookies(resp: httpx.Response, findings: list[Finding]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Fetch helper (reused from original)
-# ---------------------------------------------------------------------------
-
-
-async def _fetch(target: str, timeout: float) -> httpx.Response:
-    """Try HTTPS first (short connect timeout), fall back to HTTP."""
-    host = target.split(":")[0] if ":" in target and not target.startswith("[") else target
-
-    if "://" in target:
-        async with httpx.AsyncClient(verify=False, timeout=timeout, follow_redirects=True) as client:
-            return await client.get(target)
-
-    # Try HTTPS with a short connect timeout — don't wait 10s if port 443 isn't open
-    try:
-        connect_timeout = min(3.0, timeout)
-        timeouts = httpx.Timeout(timeout, connect=connect_timeout)
-        async with httpx.AsyncClient(verify=False, timeout=timeouts, follow_redirects=True) as client:
-            return await client.get(f"https://{target}")
-    except httpx.HTTPError:
-        pass
-
-    # Fall back to HTTP
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        return await client.get(f"http://{host}")
-
-
-# ---------------------------------------------------------------------------
-# Headers to check: (header_name, severity_if_missing, title, description)
-# ---------------------------------------------------------------------------
-
-_EXPECTED_HEADERS: list[tuple[str, Severity, str, str]] = [
-    (
-        "strict-transport-security",
-        Severity.HIGH,
-        "HSTS not set",
-        "Without HSTS, users can be downgraded to HTTP via man-in-the-middle attacks.",
-    ),
-    (
-        "content-security-policy",
-        Severity.MEDIUM,
-        "CSP not set",
-        "Content-Security-Policy helps prevent XSS and data injection attacks.",
-    ),
-    (
-        "x-content-type-options",
-        Severity.MEDIUM,
-        "X-Content-Type-Options not set",
-        "Without nosniff, browsers may MIME-sniff responses, enabling XSS via content type confusion.",
-    ),
-    (
-        "x-frame-options",
-        Severity.MEDIUM,
-        "X-Frame-Options not set",
-        "Without framing protection the site is vulnerable to clickjacking.",
-    ),
-    (
-        "permissions-policy",
-        Severity.LOW,
-        "Permissions-Policy not set",
-        "Permissions-Policy restricts browser features (camera, microphone, geolocation).",
-    ),
-    (
-        "referrer-policy",
-        Severity.LOW,
-        "Referrer-Policy not set",
-        "Without Referrer-Policy, the full URL may leak to third-party sites.",
-    ),
-]
-
-# Deep-analysis dispatch: header → analysis function
-_DEEP_CHECKS: dict[str, Callable[..., Any]] = {
-    "strict-transport-security": _check_hsts,
-    "content-security-policy": _check_csp,
-    "x-content-type-options": _check_xcto,
-    "x-frame-options": _check_xfo,
-    "referrer-policy": _check_referrer_policy,
-}
-
-
-# ---------------------------------------------------------------------------
 # Main scan
 # ---------------------------------------------------------------------------
 
@@ -374,63 +432,16 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     except httpx.HTTPError as exc:
         return CheckResult(check=CheckType.HEADERS, error=f"Cannot connect to {target}: {exc}")
 
-    headers_lower = {k.lower(): v for k, v in resp.headers.items()}
+    headers = {k.lower(): v for k, v in resp.headers.items()}
     findings: list[Finding] = []
 
-    # --- Missing-header checks + deep value analysis when present ---
-    present_security_headers: dict[str, str] = {}
-    for header_name, severity, title, description in _EXPECTED_HEADERS:
-        if header_name not in headers_lower:
-            findings.append(Finding(severity=severity, title=title, description=description))
-        else:
-            value = headers_lower[header_name]
-            present_security_headers[header_name] = value
-            # Run deep analysis if available
-            deep_fn = _DEEP_CHECKS.get(header_name)
-            if deep_fn:
-                deep_fn(value, findings)
+    # Declarative rule checks
+    _eval_required(headers, findings)
+    _eval_leaks(headers, findings)
+    _eval_xxss(headers, findings)
 
-    # --- Positive findings for well-configured headers ---
-    if "strict-transport-security" in present_security_headers:
-        match = re.search(r"max-age\s*=\s*(\d+)", present_security_headers["strict-transport-security"].lower())
-        if match and int(match.group(1)) >= _MIN_HSTS_MAX_AGE:
-            findings.append(
-                Finding(
-                    severity=Severity.INFO,
-                    title="HSTS is properly configured",
-                    description="HSTS is set with a strong max-age.",
-                )
-            )
-    if "content-security-policy" in present_security_headers:
-        findings.append(
-            Finding(
-                severity=Severity.INFO,
-                title="Content-Security-Policy is set",
-                description="CSP header is present and enforced.",
-            )
-        )
-    if (
-        "x-content-type-options" in present_security_headers
-        and present_security_headers["x-content-type-options"].strip().lower() == _VALID_XCTO
-    ):
-        findings.append(
-            Finding(
-                severity=Severity.INFO,
-                title="X-Content-Type-Options is set",
-                description="nosniff is enabled, preventing MIME-type sniffing.",
-            )
-        )
-    if "permissions-policy" in present_security_headers:
-        findings.append(
-            Finding(
-                severity=Severity.INFO,
-                title="Permissions-Policy is set",
-                description="Browser feature restrictions are configured.",
-            )
-        )
-
-    # --- CSP report-only without enforcement ---
-    if "content-security-policy-report-only" in headers_lower and "content-security-policy" not in headers_lower:
+    # CSP report-only without enforcement
+    if "content-security-policy-report-only" in headers and "content-security-policy" not in headers:
         findings.append(
             Finding(
                 severity=Severity.MEDIUM,
@@ -439,20 +450,9 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
             )
         )
 
-    # --- Information-leaking headers ---
-    for header_name, description in _LEAKY_HEADERS:
-        if header_name in headers_lower:
-            findings.append(
-                Finding(
-                    severity=Severity.LOW,
-                    title=f"{header_name} header leaks information",
-                    description=f"{description}. Value: {headers_lower[header_name]}",
-                    details={"header": header_name, "value": headers_lower[header_name]},
-                )
-            )
-
-    # --- HTTPS check ---
-    if resp.url and str(resp.url).startswith("http://"):
+    # HTTPS check
+    url = str(resp.url)
+    if url.startswith("http://"):
         findings.append(
             Finding(
                 severity=Severity.HIGH,
@@ -460,19 +460,18 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
                 description="The target does not use HTTPS, all traffic is unencrypted.",
             )
         )
-    elif resp.url and str(resp.url).startswith("https://"):
+    elif url.startswith("https://"):
         findings.append(
             Finding(severity=Severity.INFO, title="HTTPS is enabled", description="Site is served over HTTPS.")
         )
 
-    # --- Cookie security ---
+    # Cookie security
     _check_cookies(resp, findings)
 
     raw = {
-        "url": str(resp.url),
+        "url": url,
         "status_code": resp.status_code,
         "headers": dict(resp.headers),
-        "present_security_headers": present_security_headers,
     }
 
     return CheckResult(check=CheckType.HEADERS, findings=findings, raw=raw)
