@@ -82,19 +82,13 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     headers_lower = {k.lower(): v for k, v in resp.headers.items()}
     findings: list[Finding] = []
 
-    # Check for missing security headers
+    # Check for missing security headers (findings = problems only, present headers go in raw)
+    present_security_headers: dict[str, str] = {}
     for header_name, title, severity, description in _EXPECTED_HEADERS:
         if header_name not in headers_lower:
             findings.append(Finding(severity=severity, title=title, description=description))
         else:
-            findings.append(
-                Finding(
-                    severity=Severity.INFO,
-                    title=f"{header_name} is set",
-                    description=f"Value: {headers_lower[header_name]}",
-                    details={"value": headers_lower[header_name]},
-                )
-            )
+            present_security_headers[header_name] = headers_lower[header_name]
 
     # Check for info-leaking headers
     for header_name, description in _LEAKY_HEADERS:
@@ -122,6 +116,7 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
         "url": str(resp.url),
         "status_code": resp.status_code,
         "headers": dict(resp.headers),
+        "present_security_headers": present_security_headers,
     }
 
     return CheckResult(check=CheckType.HEADERS, findings=findings, raw=raw)

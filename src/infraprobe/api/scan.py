@@ -22,14 +22,19 @@ def register_scanner(check_type: CheckType, fn: ScanFn) -> None:
     _SCANNERS[check_type] = fn
 
 
+# Buffer for asyncio scheduling overhead on top of scanner budget.
+# If a scanner respects its timeout, this grace period is never reached.
+_ORCHESTRATOR_GRACE = 2.0
+
+
 async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> CheckResult:
     fn = _SCANNERS.get(check_type)
     if fn is None:
-        return CheckResult(check=check_type, error=f"Scanner {check_type} not implemented")
+        return CheckResult(check=check_type, error=f"Scanner {check_type} not registered")
     try:
-        return await asyncio.wait_for(fn(target, timeout), timeout=timeout + 2)
+        return await asyncio.wait_for(fn(target, timeout), timeout=timeout + _ORCHESTRATOR_GRACE)
     except TimeoutError:
-        return CheckResult(check=check_type, error=f"Scanner {check_type} timed out")
+        return CheckResult(check=check_type, error=f"Scanner {check_type} timed out after {timeout}s")
     except Exception as exc:
         return CheckResult(check=check_type, error=f"Scanner {check_type} failed: {exc}")
 

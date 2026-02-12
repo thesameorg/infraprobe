@@ -55,6 +55,8 @@ docker compose up
 
 **CheckType enum defines planned scanners:** `ssl`, `headers`, `dns`, `tech` — only `headers` is implemented so far.
 
+**Architecture reference:** See `docs/architecture.md` for the canonical rules on scanner contracts, timeout handling, error propagation, concurrency, and what to exclude (YAGNI). All code changes involving scanners, timeouts, or error handling MUST follow that document.
+
 ## Conventions
 
 - Python 3.12, ruff for linting/formatting (line-length=120)
