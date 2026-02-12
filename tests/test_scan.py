@@ -289,3 +289,79 @@ def test_scan_blacklist_raw_structure(client):
     octets = raw["ip"].split(".")
     reversed_octets = raw["reversed_ip"].split(".")
     assert octets == list(reversed(reversed_octets))
+
+
+# --- /v1/ API prefix tests ---
+
+
+def test_v1_scan_works(client):
+    """/v1/scan should work identically to /scan."""
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert result["results"]["headers"]["error"] is None
+
+
+def test_v1_default_checks_are_light(client):
+    """Default checks should only include light checks, not deep ones."""
+    resp = client.post("/v1/scan", json={"targets": ["example.com"]})
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    # Should have light checks
+    assert "headers" in result["results"]
+    # Should NOT have deep checks by default
+    assert "ssl_deep" not in result["results"]
+    assert "tech_deep" not in result["results"]
+
+
+# --- Deep scanner tests ---
+
+
+def test_scan_ssl_deep(client):
+    """SSL deep scan (SSLyze) — should return protocol/vuln data."""
+    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["ssl_deep"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    ssl_result = result["results"]["ssl_deep"]
+    assert ssl_result["error"] is None
+
+    raw = ssl_result["raw"]
+    assert raw["host"] == "example.com"
+    assert len(raw["supported_protocols"]) > 0
+    assert "vulnerabilities" in raw
+    assert raw["vulnerabilities"]["heartbleed"] is False
+
+
+def test_scan_dns_deep(client):
+    """DNS deep scan (checkdmarc) — should return SPF/DMARC/DNSSEC data."""
+    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["dns_deep"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    dns_result = result["results"]["dns_deep"]
+    assert dns_result["error"] is None
+
+    raw = dns_result["raw"]
+    assert raw["domain"] == "google.com"
+    assert "spf" in raw
+    assert "v=spf1" in raw["spf"].lower()
+    assert "dmarc" in raw
+    assert "v=dmarc1" in raw["dmarc"].lower()
+    assert raw["dmarc_policy"] == "reject"
+    assert "dnssec" in raw
+
+
+def test_scan_tech_deep(client):
+    """Tech deep scan (wappalyzer) — should detect technologies."""
+    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["tech_deep"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    tech_result = result["results"]["tech_deep"]
+    assert tech_result["error"] is None
+
+    raw = tech_result["raw"]
+    assert "detected" in raw
+    assert "technologies_count" in raw
+    assert isinstance(raw["detected"], list)

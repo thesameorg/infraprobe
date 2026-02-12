@@ -14,10 +14,23 @@ class Severity(StrEnum):
 
 class CheckType(StrEnum):
     SSL = "ssl"
+    SSL_DEEP = "ssl_deep"
     HEADERS = "headers"
     DNS = "dns"
+    DNS_DEEP = "dns_deep"
     TECH = "tech"
+    TECH_DEEP = "tech_deep"
     BLACKLIST = "blacklist"
+
+
+# Default checks (light only — deep checks are opt-in)
+LIGHT_CHECKS: list[CheckType] = [
+    CheckType.HEADERS,
+    CheckType.SSL,
+    CheckType.DNS,
+    CheckType.TECH,
+    CheckType.BLACKLIST,
+]
 
 
 class Finding(BaseModel):
@@ -36,7 +49,7 @@ class CheckResult(BaseModel):
 
 class ScanRequest(BaseModel):
     targets: list[str] = Field(min_length=1, max_length=10)
-    checks: list[CheckType] = Field(default_factory=lambda: list(CheckType))
+    checks: list[CheckType] = Field(default_factory=lambda: list(LIGHT_CHECKS))
 
 
 class SeveritySummary(BaseModel):

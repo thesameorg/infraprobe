@@ -114,6 +114,16 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
             )
 
     listed_count = sum(1 for v in listings.values() if v == "listed")
+
+    if listed_count == 0:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"Not listed on any of {len(_DNSBLS)} blacklists",
+                description=f"IP {ip} is clean across all checked DNSBL zones.",
+            )
+        )
+
     raw = {
         "ip": ip,
         "reversed_ip": reversed_ip,

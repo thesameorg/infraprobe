@@ -12,6 +12,8 @@ dependencies = [
     "cryptography>=44.0",
     "dnspython>=2.7",
     "sslyze>=6.3.0",
+    "checkdmarc==4.8.5",
+    "wappalyzer>=1.0.20",
 ]
 
 [build-system]

@@ -39,10 +39,20 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
         return CheckResult(check=check_type, error=f"Scanner {check_type} failed: {exc}")
 
 
+_DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep"})
+
+
 async def _scan_target(target: str, checks: list[CheckType]) -> TargetResult:
     start = time.monotonic()
 
-    tasks = [_run_scanner(ct, target, settings.scanner_timeout) for ct in checks]
+    tasks = [
+        _run_scanner(
+            ct,
+            target,
+            settings.deep_scanner_timeout if ct in _DEEP_CHECKS else settings.scanner_timeout,
+        )
+        for ct in checks
+    ]
     results: list[CheckResult] = await asyncio.gather(*tasks)
 
     all_findings = []

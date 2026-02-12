@@ -8,6 +8,8 @@ and OWASP Secure Headers Project recommendations.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 
@@ -147,7 +149,7 @@ def _check_csp(value: str, findings: list[Finding]) -> None:
                 Finding(
                     severity=Severity.MEDIUM,
                     title=f"CSP {directive} contains unsafe source",
-                    description=f"The '{directive}' directive contains {', '.join(dangerous)} which weakens the policy.",
+                    description=f"'{directive}' contains {', '.join(dangerous)} which weakens the policy.",
                     details={"directive": directive, "sources": sources, "unsafe": dangerous},
                 )
             )
@@ -224,7 +226,7 @@ def _check_referrer_policy(value: str, findings: list[Finding]) -> None:
             Finding(
                 severity=Severity.LOW,
                 title="Referrer-Policy uses weak no-referrer-when-downgrade",
-                description="This leaks the full URL for same-protocol requests. Prefer strict-origin-when-cross-origin.",
+                description="Leaks the full URL for same-protocol requests. Prefer strict-origin-when-cross-origin.",
                 details={"value": value},
             )
         )
@@ -352,7 +354,7 @@ _EXPECTED_HEADERS: list[tuple[str, Severity, str, str]] = [
 ]
 
 # Deep-analysis dispatch: header → analysis function
-_DEEP_CHECKS: dict[str, callable] = {
+_DEEP_CHECKS: dict[str, Callable[..., Any]] = {
     "strict-transport-security": _check_hsts,
     "content-security-policy": _check_csp,
     "x-content-type-options": _check_xcto,
@@ -388,6 +390,45 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
             if deep_fn:
                 deep_fn(value, findings)
 
+    # --- Positive findings for well-configured headers ---
+    if "strict-transport-security" in present_security_headers:
+        match = re.search(r"max-age\s*=\s*(\d+)", present_security_headers["strict-transport-security"].lower())
+        if match and int(match.group(1)) >= _MIN_HSTS_MAX_AGE:
+            findings.append(
+                Finding(
+                    severity=Severity.INFO,
+                    title="HSTS is properly configured",
+                    description="HSTS is set with a strong max-age.",
+                )
+            )
+    if "content-security-policy" in present_security_headers:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="Content-Security-Policy is set",
+                description="CSP header is present and enforced.",
+            )
+        )
+    if (
+        "x-content-type-options" in present_security_headers
+        and present_security_headers["x-content-type-options"].strip().lower() == _VALID_XCTO
+    ):
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="X-Content-Type-Options is set",
+                description="nosniff is enabled, preventing MIME-type sniffing.",
+            )
+        )
+    if "permissions-policy" in present_security_headers:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="Permissions-Policy is set",
+                description="Browser feature restrictions are configured.",
+            )
+        )
+
     # --- CSP report-only without enforcement ---
     if "content-security-policy-report-only" in headers_lower and "content-security-policy" not in headers_lower:
         findings.append(
@@ -418,6 +459,10 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
                 title="Site served over HTTP (not HTTPS)",
                 description="The target does not use HTTPS, all traffic is unencrypted.",
             )
+        )
+    elif resp.url and str(resp.url).startswith("https://"):
+        findings.append(
+            Finding(severity=Severity.INFO, title="HTTPS is enabled", description="Site is served over HTTPS.")
         )
 
     # --- Cookie security ---

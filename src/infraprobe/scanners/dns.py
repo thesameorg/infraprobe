@@ -58,6 +58,9 @@ def _check_spf(txt_records: list[str]) -> tuple[str | None, list[Finding]]:
             )
         )
     else:
+        findings.append(
+            Finding(severity=Severity.INFO, title="SPF record present", description="SPF record is configured.")
+        )
         lower = spf_record.lower()
         if "+all" in lower:
             findings.append(
@@ -102,6 +105,9 @@ def _check_dmarc(txt_records: list[str]) -> tuple[str | None, list[Finding]]:
             )
         )
     else:
+        findings.append(
+            Finding(severity=Severity.INFO, title="DMARC record present", description="DMARC record is configured.")
+        )
         lower = dmarc_record.lower()
         if "p=none" in lower:
             findings.append(
@@ -127,7 +133,13 @@ def _check_caa(caa_records: list[str]) -> list[Finding]:
                 description="No CAA records found. Any certificate authority can issue certificates for this domain.",
             )
         ]
-    return []
+    return [
+        Finding(
+            severity=Severity.INFO,
+            title="CAA records present",
+            description=f"CAA records restrict certificate issuance ({len(caa_records)} record(s)).",
+        )
+    ]
 
 
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:

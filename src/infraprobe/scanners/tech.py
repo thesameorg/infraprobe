@@ -192,6 +192,27 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
                 )
             )
 
+    # Positive findings for security-relevant tech
+    categories_seen = {t["category"] for t in detected}
+    if "cdn" in categories_seen:
+        cdn_names = [t["name"] for t in detected if t["category"] == "cdn"]
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"CDN detected ({', '.join(cdn_names)})",
+                description="A CDN provides DDoS protection and improved performance.",
+            )
+        )
+    if "waf" in categories_seen:
+        waf_names = [t["name"] for t in detected if t["category"] == "waf"]
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"WAF detected ({', '.join(waf_names)})",
+                description="A Web Application Firewall helps protect against common attacks.",
+            )
+        )
+
     raw = {
         "url": str(resp.url),
         "detected": detected,
