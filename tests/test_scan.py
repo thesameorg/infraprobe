@@ -41,12 +41,10 @@ def test_scan_empty_targets(client):
     assert resp.status_code == 422
 
 
-def test_scan_unimplemented_scanner(client):
-    """Requesting a scanner that's not registered should return gracefully."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["tech"]})
-    assert resp.status_code == 200
-    result = resp.json()["results"][0]
-    assert result["results"]["tech"]["error"] is not None
+def test_scan_invalid_check_type(client):
+    """Requesting an unknown check type should return 422."""
+    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["nonexistent"]})
+    assert resp.status_code == 422
 
 
 @pytest.mark.slow
@@ -191,3 +189,103 @@ def test_scan_dns_strips_port(client):
     dns_result = resp.json()["results"][0]["results"]["dns"]
     assert dns_result["error"] is None
     assert dns_result["raw"]["domain"] == "google.com"
+
+
+# --- Tech detection scanner tests ---
+
+
+def test_scan_tech_vulnweb(client):
+    """Scan vulnweb — should detect server tech (Nginx/PHP)."""
+    resp = client.post("/scan", json={"targets": ["testphp.vulnweb.com"], "checks": ["tech"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    tech_result = result["results"]["tech"]
+    assert tech_result["error"] is None
+
+    raw = tech_result["raw"]
+    assert raw["technologies_count"] > 0
+    detected_names = [t["name"] for t in raw["detected"]]
+    # vulnweb runs Nginx + PHP
+    assert "Nginx" in detected_names or "PHP" in detected_names, f"Expected Nginx or PHP, got: {detected_names}"
+
+
+def test_scan_tech_google(client):
+    """Scan google.com — should detect something (at least a web server or CDN)."""
+    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["tech"]})
+    assert resp.status_code == 200
+
+    tech_result = resp.json()["results"][0]["results"]["tech"]
+    assert tech_result["error"] is None
+    assert isinstance(tech_result["raw"]["detected"], list)
+
+
+def test_scan_tech_raw_structure(client):
+    """Verify tech scanner raw data structure."""
+    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["tech"]})
+    assert resp.status_code == 200
+
+    tech_result = resp.json()["results"][0]["results"]["tech"]
+    assert tech_result["error"] is None
+
+    raw = tech_result["raw"]
+    assert "url" in raw
+    assert "detected" in raw
+    assert "technologies_count" in raw
+    assert isinstance(raw["detected"], list)
+    assert raw["technologies_count"] == len(raw["detected"])
+
+
+def test_scan_all_checks(client):
+    """Scan with all 5 check types — all results should be present."""
+    resp = client.post(
+        "/scan",
+        json={"targets": ["example.com"], "checks": ["headers", "ssl", "dns", "tech", "blacklist"]},
+    )
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    for check in ["headers", "ssl", "dns", "tech", "blacklist"]:
+        assert check in result["results"], f"Missing result for {check}"
+        assert result["results"][check]["error"] is None, f"{check} returned error: {result['results'][check]['error']}"
+
+
+# --- Blacklist (DNSBL) scanner tests ---
+
+
+def test_scan_blacklist_google(client):
+    """Scan google.com DNSBL — should resolve IP and check all lists."""
+    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["blacklist"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    bl_result = result["results"]["blacklist"]
+    assert bl_result["error"] is None
+
+    raw = bl_result["raw"]
+    assert raw["ip"] != ""
+    assert raw["total_checked"] > 10
+    assert isinstance(raw["listings"], dict)
+    # All listings should be "listed" or "clean"
+    for zone, status in raw["listings"].items():
+        assert status in ("listed", "clean"), f"Unexpected status for {zone}: {status}"
+
+
+def test_scan_blacklist_raw_structure(client):
+    """Verify blacklist scanner raw data structure."""
+    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["blacklist"]})
+    assert resp.status_code == 200
+
+    bl_result = resp.json()["results"][0]["results"]["blacklist"]
+    assert bl_result["error"] is None
+
+    raw = bl_result["raw"]
+    assert "ip" in raw
+    assert "reversed_ip" in raw
+    assert "listings" in raw
+    assert "listed_count" in raw
+    assert "total_checked" in raw
+    # Verify reverse IP format
+    octets = raw["ip"].split(".")
+    reversed_octets = raw["reversed_ip"].split(".")
+    assert octets == list(reversed(reversed_octets))

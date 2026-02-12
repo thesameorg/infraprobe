@@ -17,6 +17,7 @@ class CheckType(StrEnum):
     HEADERS = "headers"
     DNS = "dns"
     TECH = "tech"
+    BLACKLIST = "blacklist"
 
 
 class Finding(BaseModel):
