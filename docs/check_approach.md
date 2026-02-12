@@ -78,7 +78,7 @@ Scanners must handle their own errors. The orchestrator provides a safety net bu
 5. Add integration test in `tests/test_scan.py` against a real target
 
 What you don't need to change:
-- `api/scan.py` — handles any registered scanner automatically. Individual `POST /v1/check/{type}` endpoints are generated from `CheckType` at import time, so new enum values get their own route automatically.
+- `api/scan.py` — handles any registered scanner automatically. Individual endpoints (`/v1/check/{type}` for light, `/v1/check_deep/{type}` for deep) are generated from `CheckType` at import time, so new enum values get their own route automatically.
 - `scoring.py` — works on findings from any scanner
 
 ---

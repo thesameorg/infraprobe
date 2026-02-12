@@ -3,10 +3,12 @@ from fastapi import FastAPI
 from infraprobe.api.scan import register_scanner
 from infraprobe.api.scan import router as scan_router
 from infraprobe.models import CheckType
-from infraprobe.scanners import blacklist, dns_deep, headers, tech, tech_deep
+from infraprobe.scanners import blacklist, headers, tech
 from infraprobe.scanners import dns as dns_scanner
 from infraprobe.scanners import ssl as ssl_scanner
-from infraprobe.scanners import ssl_deep as ssl_deep_scanner
+from infraprobe.scanners.deep import dns as dns_deep
+from infraprobe.scanners.deep import ssl as ssl_deep_scanner
+from infraprobe.scanners.deep import tech as tech_deep
 
 app = FastAPI(title="InfraProbe", version="0.2.0")
 

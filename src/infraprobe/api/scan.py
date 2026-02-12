@@ -110,5 +110,11 @@ def _make_check_handler(ct: CheckType):
 
 
 # Register a dedicated route per check type so each appears as its own endpoint in OpenAPI.
+# Deep checks live under /check_deep/{name} (e.g. /check_deep/ssl), light checks under /check/{name}.
 for _ct in CheckType:
-    router.add_api_route(f"/check/{_ct.value}", _make_check_handler(_ct), methods=["POST"], response_model=TargetResult)
+    _handler = _make_check_handler(_ct)
+    if _ct in _DEEP_CHECKS:
+        _slug = _ct.value.removesuffix("_deep")
+        router.add_api_route(f"/check_deep/{_slug}", _handler, methods=["POST"], response_model=TargetResult)
+    else:
+        router.add_api_route(f"/check/{_ct.value}", _handler, methods=["POST"], response_model=TargetResult)

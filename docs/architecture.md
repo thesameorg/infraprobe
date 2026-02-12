@@ -9,7 +9,8 @@ Technical architecture for InfraProbe. Covers system design, component structure
 InfraProbe is a stateless HTTP API that runs security checks against infrastructure targets. Two endpoint styles exist under `/v1`:
 
 - **`POST /v1/scan`** — bundle endpoint. Accepts one or more targets and check types, executes all checks concurrently, scores the results, and returns a `ScanResponse`.
-- **`POST /v1/check/{type}`** — individual scanner endpoints (one fixed route per `CheckType`, e.g. `/v1/check/headers`). Accepts a single target, runs one scanner, returns a `TargetResult`. Each is a separate route in OpenAPI for per-endpoint RapidAPI monetization.
+- **`POST /v1/check/{type}`** — light scanner endpoints (e.g. `/v1/check/headers`). Accepts a single target, runs one scanner, returns a `TargetResult`.
+- **`POST /v1/check_deep/{type}`** — deep scanner endpoints (e.g. `/v1/check_deep/ssl`). Same contract as light checks. Each is a separate route in OpenAPI for per-endpoint RapidAPI monetization.
 
 There is no persistent storage, no background processing, and no inter-request state. No unversioned routes — all access goes through `/v1`.
 
@@ -17,7 +18,7 @@ There is no persistent storage, no background processing, and no inter-request s
 Client
   │
   │  POST /v1/scan {targets, checks}     — or —
-  │  POST /v1/check/headers {target}
+  │  POST /v1/check/headers {target}  or  /v1/check_deep/ssl {target}
   ▼
 ┌──────────────────────────────────────────────────┐
 │  FastAPI (ASGI)                                  │
@@ -58,10 +59,17 @@ src/infraprobe/
 ├── scoring.py          # Findings → numeric score → letter grade
 ├── blocklist.py        # SSRF protection: block private/reserved IPs
 ├── api/
-│   └── scan.py         # POST /v1/scan + /v1/check/{type}, orchestrator, scanner registry
+│   └── scan.py         # POST /v1/scan + /v1/check/ + /v1/check_deep/, orchestrator, scanner registry
 └── scanners/
     ├── headers.py      # HTTP security headers check
-    └── ssl.py          # SSL/TLS certificate and cipher check
+    ├── ssl.py          # SSL/TLS certificate and cipher check
+    ├── dns.py          # DNS security records check
+    ├── tech.py         # Technology detection (lightweight)
+    ├── blacklist.py    # Domain blacklist check
+    └── deep/
+        ├── ssl.py      # Deep SSL/TLS scan (SSLyze)
+        ├── dns.py      # Deep DNS scan (checkdmarc)
+        └── tech.py     # Deep tech detection (Wappalyzer)
 ```
 
 Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for dev: `main.py` (runs uvicorn with reload).
@@ -88,11 +96,11 @@ Owns the full lifecycle of a scan request. Serves two endpoint styles:
 5. Collect all `CheckResult`s, aggregate findings, pass to `scoring.calculate_score()`
 6. Return `ScanResponse`
 
-**Individual (`POST /check/{type}`):**
+**Individual (`POST /check/{type}` and `POST /check_deep/{type}`):**
 1. Validate and parse `SingleCheckRequest` (single target)
 2. Same target validation and scanner dispatch as bundle, but runs one check type
 3. Returns `TargetResult` directly (not wrapped in `ScanResponse`)
-4. Routes are generated at import time by looping over `CheckType` enum — each gets its own fixed route via `router.add_api_route()`, so new `CheckType` values automatically get endpoints
+4. Routes are generated at import time by looping over `CheckType` enum — light checks get `/check/{name}`, deep checks get `/check_deep/{name}` (with `_deep` suffix stripped from the URL slug)
 
 The orchestrator is scanner-agnostic. It dispatches by `CheckType` to whatever function was registered. Adding a scanner requires no changes here.
 
@@ -156,7 +164,7 @@ Finding                        ├── high: int
 
 Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, tech_deep, blacklist).
 
-`POST /v1/scan` uses `ScanRequest` → `ScanResponse`. `POST /v1/check/{type}` uses `SingleCheckRequest` → `TargetResult`.
+`POST /v1/scan` uses `ScanRequest` → `ScanResponse`. `POST /v1/check/{type}` and `POST /v1/check_deep/{type}` use `SingleCheckRequest` → `TargetResult`.
 
 `CheckResult.error` is the discriminator: if null, `findings` and `raw` are valid. If set, the scanner failed and `findings` is empty.
 
