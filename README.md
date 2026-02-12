@@ -2,28 +2,6 @@
 
 Infrastructure security scanning API. Accepts target domains/IPs, runs security checks in parallel, returns scored JSON results with findings.
 
-## Live
-
-Deployed on Google Cloud Run:
-
-```bash
-# Health check
-curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-    https://infraprobe-tzhg2ptrea-uc.a.run.app/health
-
-# Run a full scan (bundle)
-curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-    -H "Content-Type: application/json" \
-    -d '{"targets": ["example.com"], "checks": ["headers"]}' \
-    https://infraprobe-tzhg2ptrea-uc.a.run.app/v1/scan
-
-# Run a single check
-curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-    -H "Content-Type: application/json" \
-    -d '{"target": "example.com"}' \
-    https://infraprobe-tzhg2ptrea-uc.a.run.app/v1/check/headers
-```
-
 ## What it does
 
 Two endpoint styles, all under `/v1`:
@@ -77,7 +55,3 @@ POST /v1/check/{type}   → api/scan.py (single check) → one scanner → scori
 - Timeout enforcement at orchestrator level (budget + grace)
 
 See [docs/architecture.md](docs/architecture.md) for full details.
-
-## CI/CD
-
-Push to `main` → pytest → build Docker image → push to Artifact Registry → deploy to Cloud Run.
