@@ -406,9 +406,9 @@ def test_check_dns(client):
 
 
 def test_check_invalid_type(client):
-    """POST /v1/check/nonexistent — should return 422."""
+    """POST /v1/check/nonexistent — no matching route, should return 404."""
     resp = client.post("/v1/check/nonexistent", json={"target": "example.com"})
-    assert resp.status_code == 422
+    assert resp.status_code == 404
 
 
 def test_check_blocked_target(client):

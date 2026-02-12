@@ -90,8 +90,7 @@ async def scan(request: ScanRequest) -> ScanResponse:
     return ScanResponse(results=list(target_results))
 
 
-@router.post("/check/{check_type}")
-async def single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
+async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
     try:
         target = validate_target(request.target)
     except BlockedTargetError as exc:
@@ -100,3 +99,16 @@ async def single_check(check_type: CheckType, request: SingleCheckRequest) -> Ta
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     return await _scan_target(target, [check_type])
+
+
+def _make_check_handler(ct: CheckType):
+    async def handler(request: SingleCheckRequest) -> TargetResult:
+        return await _single_check(ct, request)
+
+    handler.__name__ = f"check_{ct.value}"
+    return handler
+
+
+# Register a dedicated route per check type so each appears as its own endpoint in OpenAPI.
+for _ct in CheckType:
+    router.add_api_route(f"/check/{_ct.value}", _make_check_handler(_ct), methods=["POST"], response_model=TargetResult)

@@ -11,23 +11,36 @@ Deployed on Google Cloud Run:
 curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
     https://infraprobe-tzhg2ptrea-uc.a.run.app/health
 
-# Run a scan
+# Run a full scan (bundle)
 curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
     -H "Content-Type: application/json" \
     -d '{"targets": ["example.com"], "checks": ["headers"]}' \
-    https://infraprobe-tzhg2ptrea-uc.a.run.app/scan
+    https://infraprobe-tzhg2ptrea-uc.a.run.app/v1/scan
+
+# Run a single check
+curl -X POST -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+    -H "Content-Type: application/json" \
+    -d '{"target": "example.com"}' \
+    https://infraprobe-tzhg2ptrea-uc.a.run.app/v1/check/headers
 ```
 
 ## What it does
 
-**POST /scan** accepts 1-10 targets and runs selected checks concurrently:
+Two endpoint styles, all under `/v1`:
 
-| Check | Status | Description |
-|-------|--------|-------------|
-| `headers` | Implemented | Missing security headers, info-leaking headers, HTTPS detection |
-| `ssl` | Planned | TLS certificate, protocol versions, cipher suites |
-| `dns` | Planned | DNS security (SPF, DMARC, DNSSEC) |
-| `tech` | Planned | Technology fingerprinting |
+- **`POST /v1/scan`** — bundle endpoint. Accepts 1-10 targets and runs selected checks concurrently.
+- **`POST /v1/check/{type}`** — individual endpoints per scanner (e.g. `/v1/check/headers`). Single target, single check.
+
+| Check | Description |
+|-------|-------------|
+| `headers` | Missing security headers, info-leaking headers, HTTPS detection |
+| `ssl` | TLS certificate, protocol versions, cipher suites |
+| `ssl_deep` | Deep SSL analysis via SSLyze (protocols, vulnerabilities) |
+| `dns` | DNS records, SPF, DMARC |
+| `dns_deep` | Deep DNS analysis via checkdmarc (SPF/DMARC/DNSSEC) |
+| `tech` | Technology fingerprinting |
+| `tech_deep` | Deep tech detection via Wappalyzer |
+| `blacklist` | DNSBL blacklist checking |
 
 Results are scored (A+ through F) based on finding severity.
 
@@ -54,7 +67,8 @@ docker compose up
 ## Architecture
 
 ```
-POST /scan → api/scan.py (orchestrator) → scanners (parallel via asyncio.gather) → scoring → response
+POST /v1/scan           → api/scan.py (orchestrator) → scanners (parallel) → scoring → response
+POST /v1/check/{type}   → api/scan.py (single check) → one scanner → scoring → response
 ```
 
 - Stateless API — no database, no background jobs

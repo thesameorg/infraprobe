@@ -39,7 +39,8 @@ Request timeout (uvicorn/Cloud Run: 300s)
 
 | Constant | Value | Location | Purpose |
 |----------|-------|----------|---------|
-| `settings.scanner_timeout` | `10.0s` | `config.py` | Per-scanner budget passed to `scan()` |
+| `settings.scanner_timeout` | `10.0s` | `config.py` | Per-scanner budget for light checks |
+| `settings.deep_scanner_timeout` | `30.0s` | `config.py` | Per-scanner budget for deep checks (`ssl_deep`, `dns_deep`, `tech_deep`) |
 | `_ORCHESTRATOR_GRACE` | `2.0s` | `api/scan.py` | Buffer for asyncio scheduling overhead |
 
 **Rules:**
@@ -77,7 +78,7 @@ Scanners must handle their own errors. The orchestrator provides a safety net bu
 5. Add integration test in `tests/test_scan.py` against a real target
 
 What you don't need to change:
-- `api/scan.py` — handles any registered scanner automatically
+- `api/scan.py` — handles any registered scanner automatically. Individual `POST /v1/check/{type}` endpoints are generated from `CheckType` at import time, so new enum values get their own route automatically.
 - `scoring.py` — works on findings from any scanner
 
 ---

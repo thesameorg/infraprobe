@@ -6,12 +6,18 @@ Technical architecture for InfraProbe. Covers system design, component structure
 
 ## System Overview
 
-InfraProbe is a stateless HTTP API that runs security checks against infrastructure targets. A single `POST /scan` request accepts one or more targets and check types, executes all checks concurrently, scores the results, and returns a structured JSON response. There is no persistent storage, no background processing, and no inter-request state.
+InfraProbe is a stateless HTTP API that runs security checks against infrastructure targets. Two endpoint styles exist under `/v1`:
+
+- **`POST /v1/scan`** — bundle endpoint. Accepts one or more targets and check types, executes all checks concurrently, scores the results, and returns a `ScanResponse`.
+- **`POST /v1/check/{type}`** — individual scanner endpoints (one fixed route per `CheckType`, e.g. `/v1/check/headers`). Accepts a single target, runs one scanner, returns a `TargetResult`. Each is a separate route in OpenAPI for per-endpoint RapidAPI monetization.
+
+There is no persistent storage, no background processing, and no inter-request state. No unversioned routes — all access goes through `/v1`.
 
 ```
 Client
   │
-  │  POST /scan {targets, checks}
+  │  POST /v1/scan {targets, checks}     — or —
+  │  POST /v1/check/headers {target}
   ▼
 ┌──────────────────────────────────────────────────┐
 │  FastAPI (ASGI)                                  │
@@ -52,7 +58,7 @@ src/infraprobe/
 ├── scoring.py          # Findings → numeric score → letter grade
 ├── blocklist.py        # SSRF protection: block private/reserved IPs
 ├── api/
-│   └── scan.py         # POST /scan, orchestrator, scanner registry
+│   └── scan.py         # POST /v1/scan + /v1/check/{type}, orchestrator, scanner registry
 └── scanners/
     ├── headers.py      # HTTP security headers check
     └── ssl.py          # SSL/TLS certificate and cipher check
@@ -66,20 +72,27 @@ Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for d
 
 ### App (`app.py`)
 
-Creates the FastAPI instance. Registers scanners into the module-level registry in `api/scan.py` via `register_scanner(CheckType, scan_fn)`. Mounts the scan router. Exposes `GET /health`.
+Creates the FastAPI instance. Registers scanners into the module-level registry in `api/scan.py` via `register_scanner(CheckType, scan_fn)`. Mounts the scan router under `/v1`. Exposes `GET /health`.
 
 No middleware, no CORS, no auth. These are deferred until needed.
 
 ### Orchestrator (`api/scan.py`)
 
-Owns the full lifecycle of a scan request:
+Owns the full lifecycle of a scan request. Serves two endpoint styles:
 
+**Bundle (`POST /scan`):**
 1. Validate and parse `ScanRequest` (Pydantic)
 2. Resolve and validate each target through `blocklist.validate_target()` — rejects private IPs (SSRF protection) and unresolvable domains
 3. Fan out: `asyncio.gather` over targets, then `asyncio.gather` over checks per target
 4. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + GRACE)` — the single timeout enforcement point
 5. Collect all `CheckResult`s, aggregate findings, pass to `scoring.calculate_score()`
 6. Return `ScanResponse`
+
+**Individual (`POST /check/{type}`):**
+1. Validate and parse `SingleCheckRequest` (single target)
+2. Same target validation and scanner dispatch as bundle, but runs one check type
+3. Returns `TargetResult` directly (not wrapped in `ScanResponse`)
+4. Routes are generated at import time by looping over `CheckType` enum — each gets its own fixed route via `router.add_api_route()`, so new `CheckType` values automatically get endpoints
 
 The orchestrator is scanner-agnostic. It dispatches by `CheckType` to whatever function was registered. Adding a scanner requires no changes here.
 
@@ -114,31 +127,36 @@ Starts at 100 points, deducts per finding severity: CRITICAL -40, HIGH -20, MEDI
 | `log_level` | `"info"` | `INFRAPROBE_LOG_LEVEL` |
 | `port` | `8080` | `INFRAPROBE_PORT` |
 | `scanner_timeout` | `10.0` | `INFRAPROBE_SCANNER_TIMEOUT` |
+| `deep_scanner_timeout` | `30.0` | `INFRAPROBE_DEEP_SCANNER_TIMEOUT` |
 
 ---
 
 ## Data Model
 
 ```
-ScanRequest                    ScanResponse
-├── targets: list[str] (1-10)  └── results: list[TargetResult]
+ScanRequest                    SingleCheckRequest
+├── targets: list[str] (1-10)  └── target: str
 └── checks: list[CheckType]
-                               TargetResult
-                               ├── target: str
-CheckResult                    ├── score: str (A+ .. F)
-├── check: CheckType           ├── summary: SeveritySummary
-├── findings: list[Finding]    ├── results: dict[str, CheckResult]
-├── raw: dict[str, Any]        └── duration_ms: int
-└── error: str | None
-                               SeveritySummary
-Finding                        ├── critical: int
-├── severity: Severity         ├── high: int
-├── title: str                 ├── medium: int
-├── description: str           ├── low: int
-└── details: dict[str, Any]    └── info: int
+
+ScanResponse                   TargetResult
+└── results: list[TargetResult] ├── target: str
+                               ├── score: str (A+ .. F)
+CheckResult                    ├── summary: SeveritySummary
+├── check: CheckType           ├── results: dict[str, CheckResult]
+├── findings: list[Finding]    └── duration_ms: int
+├── raw: dict[str, Any]
+└── error: str | None          SeveritySummary
+                               ├── critical: int
+Finding                        ├── high: int
+├── severity: Severity         ├── medium: int
+├── title: str                 ├── low: int
+├── description: str           └── info: int
+└── details: dict[str, Any]
 ```
 
-Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, headers, dns, tech).
+Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, tech_deep, blacklist).
+
+`POST /v1/scan` uses `ScanRequest` → `ScanResponse`. `POST /v1/check/{type}` uses `SingleCheckRequest` → `TargetResult`.
 
 `CheckResult.error` is the discriminator: if null, `findings` and `raw` are valid. If set, the scanner failed and `findings` is empty.
 
@@ -149,7 +167,7 @@ Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, headers
 Two-level fan-out, both using `asyncio.gather`:
 
 ```
-POST /scan {targets: [A, B], checks: [headers, ssl]}
+POST /v1/scan {targets: [A, B], checks: [headers, ssl]}
 
 gather(
     _scan_target(A, [headers, ssl]),    # parallel
@@ -163,7 +181,7 @@ _scan_target(A, ...):
     )
 ```
 
-Max concurrency: 10 targets x 4 check types = 40 tasks. All I/O-bound (HTTP, DNS, TLS handshakes). No semaphore or pool — not needed at this scale.
+Max concurrency for bundle: 10 targets x 8 check types = 80 tasks. Individual check endpoints run 1 task. All I/O-bound (HTTP, DNS, TLS handshakes). No semaphore or pool — not needed at this scale.
 
 Total latency per request ≈ `max(scanner_timeout)` + scheduling overhead, not the sum.
 
@@ -238,8 +256,6 @@ Local dev: `docker-compose.yaml` mounts source as volume, enables `--reload`, ma
 
 **Deployed:** Live on Google Cloud Run (`infraprobe-tzhg2ptrea-uc.a.run.app`). Cloud Run handles auth via identity tokens. CI/CD pipeline pushes on every `main` merge.
 
-**Implemented:** `headers` scanner (HTTP security headers + info-leak detection, HTTPS-first with HTTP fallback), `ssl` scanner (TLS certificate validation, cipher strength, expiry, hostname matching).
-
-**Planned (enum defined, not implemented):** `dns`, `tech`.
+**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `tech_deep`, `blacklist` — all registered and accessible via both bundle and individual endpoints.
 
 **Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting, app-level auth, structured logging, async job queue. Add when there's a concrete need. See `docs/check_approach.md` for the full list.

@@ -9,6 +9,6 @@ run:
 # Scan a single target: make scan TARGET=example.com
 scan:
 	@test -n "$(TARGET)" || (echo "Usage: make scan TARGET=example.com" && exit 1)
-	curl -s http://localhost:8080/scan \
+	curl -s http://localhost:8080/v1/scan \
 		-H 'Content-Type: application/json' \
 		-d '{"targets": ["$(TARGET)"]}' | python3 -m json.tool
