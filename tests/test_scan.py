@@ -43,10 +43,10 @@ def test_scan_empty_targets(client):
 
 def test_scan_unimplemented_scanner(client):
     """Requesting a scanner that's not registered should return gracefully."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["dns"]})
+    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["tech"]})
     assert resp.status_code == 200
     result = resp.json()["results"][0]
-    assert result["results"]["dns"]["error"] is not None
+    assert result["results"]["tech"]["error"] is not None
 
 
 @pytest.mark.slow
@@ -126,3 +126,68 @@ def test_scan_ssl_no_tls(client):
     ssl_result = result["results"]["ssl"]
     assert ssl_result["error"] is not None
     assert ssl_result["findings"] == []
+
+
+# --- DNS scanner tests ---
+
+
+def test_scan_dns_google(client):
+    """Scan google.com DNS — should resolve records and return raw data."""
+    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["dns"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    dns_result = result["results"]["dns"]
+    assert dns_result["error"] is None
+
+    raw = dns_result["raw"]
+    assert raw["domain"] == "google.com"
+    # google.com should have A records
+    assert len(raw["a"]) > 0
+    # google.com should have MX records
+    assert len(raw["mx"]) > 0
+    # google.com should have NS records
+    assert len(raw["ns"]) > 0
+
+
+def test_scan_dns_spf_dmarc(client):
+    """Scan google.com DNS — should have SPF and DMARC (no findings for missing)."""
+    resp = client.post("/scan", json={"targets": ["google.com"], "checks": ["dns"]})
+    assert resp.status_code == 200
+
+    dns_result = resp.json()["results"][0]["results"]["dns"]
+    assert dns_result["error"] is None
+
+    titles = [f["title"] for f in dns_result["findings"]]
+    # google.com has SPF and DMARC, so those "missing" findings should NOT appear
+    assert "No SPF record" not in titles, f"google.com should have SPF, got: {titles}"
+    assert "No DMARC record" not in titles, f"google.com should have DMARC, got: {titles}"
+
+    # SPF and DMARC should be in raw
+    raw = dns_result["raw"]
+    assert "spf" in raw
+    assert "v=spf1" in raw["spf"].lower()
+    assert "dmarc" in raw
+    assert "v=dmarc1" in raw["dmarc"].lower()
+
+
+def test_scan_dns_combined(client):
+    """Scan with DNS + headers — both results should be present."""
+    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["dns", "headers"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    assert "dns" in result["results"]
+    assert "headers" in result["results"]
+    assert result["results"]["dns"]["error"] is None
+    assert result["results"]["headers"]["error"] is None
+
+
+def test_scan_dns_strips_port(client):
+    """DNS scanner should ignore port in target."""
+    resp = client.post("/scan", json={"targets": ["google.com:443"], "checks": ["dns"]})
+    assert resp.status_code == 200
+
+    dns_result = resp.json()["results"][0]["results"]["dns"]
+    assert dns_result["error"] is None
+    assert dns_result["raw"]["domain"] == "google.com"
