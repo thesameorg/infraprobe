@@ -78,7 +78,7 @@ def validate_target(raw: str) -> str:
         except socket.gaierror as exc:
             raise InvalidTargetError(f"Cannot resolve {host}: {exc}") from exc
         for info in infos:
-            ip = info[4][0]
+            ip = str(info[4][0])
             if _is_blocked_ip(ip):
                 raise BlockedTargetError(f"Target {host} resolves to blocked IP {ip}")
 
