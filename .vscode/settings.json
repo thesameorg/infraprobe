@@ -4,14 +4,30 @@
     ],
     "python.testing.unittestEnabled": false,
     "python.testing.pytestEnabled": true,
+    "python.analysis.typeCheckingMode": "off",
+    "python.languageServer": "None",
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
     "[python]": {
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.formatOnPaste": true,
         "editor.codeActionsOnSave": {
             "source.fixAll.ruff": "explicit",
             "source.organizeImports.ruff": "explicit"
         }
     },
+    "ruff.enable": true,
+    "ruff.organizeImports": true,
+    "ruff.nativeServer": true,
+    "ruff.path": [
+        "${workspaceFolder}/.venv/bin/ruff"
+    ],
+    "ruff.interpreter": [
+        "${workspaceFolder}/.venv/bin/python"
+    ],
+    "ty.path": [
+        "${workspaceFolder}/.venv/bin/ty"
+    ],
     "[json]": {
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "vscode.json-language-features"
