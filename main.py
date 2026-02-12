@@ -1,6 +1,4 @@
-def main():
-    print("Hello from infraprobe!")
-
+import uvicorn
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run("infraprobe.app:app", host="0.0.0.0", port=8080, reload=True)
