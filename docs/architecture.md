@@ -54,7 +54,8 @@ src/infraprobe/
 ├── api/
 │   └── scan.py         # POST /scan, orchestrator, scanner registry
 └── scanners/
-    └── headers.py      # HTTP security headers check
+    ├── headers.py      # HTTP security headers check
+    └── ssl.py          # SSL/TLS certificate and cipher check
 ```
 
 Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for dev: `main.py` (runs uvicorn with reload).
@@ -237,8 +238,8 @@ Local dev: `docker-compose.yaml` mounts source as volume, enables `--reload`, ma
 
 **Deployed:** Live on Google Cloud Run (`infraprobe-tzhg2ptrea-uc.a.run.app`). Cloud Run handles auth via identity tokens. CI/CD pipeline pushes on every `main` merge.
 
-**Implemented:** `headers` scanner (HTTP security headers + info-leak detection, HTTPS-first with HTTP fallback).
+**Implemented:** `headers` scanner (HTTP security headers + info-leak detection, HTTPS-first with HTTP fallback), `ssl` scanner (TLS certificate validation, cipher strength, expiry, hostname matching).
 
-**Planned (enum defined, not implemented):** `ssl`, `dns`, `tech`.
+**Planned (enum defined, not implemented):** `dns`, `tech`.
 
 **Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting, app-level auth, structured logging, async job queue. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
