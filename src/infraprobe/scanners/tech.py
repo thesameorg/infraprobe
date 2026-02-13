@@ -3,6 +3,7 @@ from typing import Any
 
 import httpx
 
+from infraprobe.http import fetch_with_fallback, scanner_client
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
 
 # --- Detection patterns ---
@@ -70,26 +71,6 @@ _TECHNOLOGIES: list[tuple[str, str, dict[str, Any]]] = [
 ]
 
 
-async def _fetch(target: str, timeout: float) -> httpx.Response:
-    """Try HTTPS first, fall back to HTTP."""
-    host = target.split(":")[0] if ":" in target and not target.startswith("[") else target
-
-    if "://" in target:
-        async with httpx.AsyncClient(verify=False, timeout=timeout, follow_redirects=True) as client:
-            return await client.get(target)
-
-    try:
-        connect_timeout = min(3.0, timeout)
-        timeouts = httpx.Timeout(timeout, connect=connect_timeout)
-        async with httpx.AsyncClient(verify=False, timeout=timeouts, follow_redirects=True) as client:
-            return await client.get(f"https://{target}")
-    except httpx.HTTPError:
-        pass
-
-    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        return await client.get(f"http://{host}")
-
-
 def _detect(
     headers_lower: dict[str, str],
     body: str,
@@ -138,7 +119,8 @@ def _detect(
 
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     try:
-        resp = await _fetch(target, timeout)
+        async with scanner_client(timeout) as client:
+            _, resp = await fetch_with_fallback(target, client)
     except httpx.HTTPError as exc:
         return CheckResult(check=CheckType.TECH, error=f"Cannot connect to {target}: {exc}")
 

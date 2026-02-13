@@ -53,19 +53,21 @@ Client
 ```
 src/infraprobe/
 ├── __init__.py
-├── app.py              # FastAPI instance, scanner registration, /health
+├── app.py              # FastAPI instance, scanner registration, exception handlers, /health
 ├── config.py           # pydantic-settings (INFRAPROBE_ env prefix)
 ├── models.py           # Pydantic models + enums (Severity, CheckType)
 ├── scoring.py          # Findings → numeric score → letter grade
-├── blocklist.py        # SSRF protection: block private/reserved IPs
+├── blocklist.py        # SSRF protection: block private/reserved IPs (urllib.parse-based)
+├── http.py             # Shared HTTP client (scanner_client, fetch_with_fallback)
 ├── api/
 │   └── scan.py         # POST /v1/scan + /v1/check/ + /v1/check_deep/, orchestrator, scanner registry
 └── scanners/
-    ├── headers.py      # HTTP security headers check
+    ├── headers_drheader.py  # HTTP security headers check (drheaderplus)
     ├── ssl.py          # SSL/TLS certificate and cipher check
     ├── dns.py          # DNS security records check
     ├── tech.py         # Technology detection (lightweight)
     ├── blacklist.py    # Domain blacklist check
+    ├── web.py          # Web security (CORS, exposed paths, mixed content, robots.txt, security.txt)
     └── deep/
         ├── ssl.py      # Deep SSL/TLS scan (SSLyze)
         ├── dns.py      # Deep DNS scan (checkdmarc)
@@ -82,7 +84,9 @@ Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for d
 
 Creates the FastAPI instance. Registers scanners into the module-level registry in `api/scan.py` via `register_scanner(CheckType, scan_fn)`. Mounts the scan router under `/v1`. Exposes `GET /health`.
 
-No middleware, no CORS, no auth. These are deferred until needed.
+Global exception handlers convert `BlockedTargetError` → HTTP 400 and `InvalidTargetError` → HTTP 422, so endpoint code doesn't need per-route try/except for target validation.
+
+Optional RapidAPI proxy-secret middleware is enabled when `INFRAPROBE_RAPIDAPI_PROXY_SECRET` is set.
 
 ### Orchestrator (`api/scan.py`)
 
@@ -90,9 +94,9 @@ Owns the full lifecycle of a scan request. Serves two endpoint styles:
 
 **Bundle (`POST /scan`):**
 1. Validate and parse `ScanRequest` (Pydantic)
-2. Resolve and validate each target through `blocklist.validate_target()` — rejects private IPs (SSRF protection) and unresolvable domains
+2. Resolve and validate each target through `blocklist.validate_target()` — rejects private IPs (SSRF protection) and unresolvable domains. Validation errors propagate as exceptions and are caught by global exception handlers in `app.py`.
 3. Fan out: `asyncio.gather` over targets, then `asyncio.gather` over checks per target
-4. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + GRACE)` — the single timeout enforcement point
+4. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + SCHEDULING_BUFFER)` — the single timeout enforcement point
 5. Collect all `CheckResult`s, aggregate findings, pass to `scoring.calculate_score()`
 6. Return `ScanResponse`
 
@@ -110,14 +114,18 @@ Module-level dict in `api/scan.py`: `_SCANNERS: dict[CheckType, ScanFn]`. Popula
 
 Scanner function signature: `async def scan(target: str, timeout: float) -> CheckResult`. See `docs/check_approach.md` for the full contract.
 
+### Shared HTTP Client (`http.py`)
+
+Provides `scanner_client(timeout)` and `fetch_with_fallback(target, client)` used by all HTTP-based scanners (`headers_drheader`, `tech`, `web`). Centralises the HTTPS-first with HTTP-fallback pattern, TLS verification disabled (scanners inspect certs separately), and short connect timeouts (3 s cap).
+
 ### Blocklist (`blocklist.py`)
 
 SSRF protection layer. Called before any scanner runs.
 
-- Parses the target (bare domain, domain:port, IP, URL)
-- If IP: checks against blocked networks (loopback, private RFC 1918, link-local, cloud metadata 169.254.x.x, IPv6 equivalents)
+- Parses the target via `urllib.parse.urlparse` (handles schemes, IPv6 brackets, ports, encoded characters). Bare IPv6 addresses are detected and wrapped in brackets before parsing.
+- If IP: checks against blocked networks. Covers IPv4 private (RFC 1918), loopback, link-local, cloud metadata (169.254.x.x), carrier-grade NAT (100.64.0.0/10), TEST-NETs, multicast, plus IPv6 equivalents including IPv4-mapped (::ffff:0:0/96), unique-local (fc00::/7), and AWS EC2 IPv6 metadata (fd00:ec2::/32).
 - If domain: resolves via DNS, checks every resolved IP against the same blocklist
-- Raises `BlockedTargetError` (→ HTTP 400) or `InvalidTargetError` (→ HTTP 422)
+- Raises `BlockedTargetError` (→ HTTP 400) or `InvalidTargetError` (→ HTTP 422), caught by global exception handlers in `app.py`
 
 ### Scoring (`scoring.py`)
 
@@ -162,7 +170,7 @@ Finding                        ├── high: int
 └── details: dict[str, Any]
 ```
 
-Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, tech_deep, blacklist).
+Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, tech_deep, blacklist, web).
 
 `POST /v1/scan` uses `ScanRequest` → `ScanResponse`. `POST /v1/check/{type}` and `POST /v1/check_deep/{type}` use `SingleCheckRequest` → `TargetResult`.
 
@@ -197,12 +205,12 @@ Total latency per request ≈ `max(scanner_timeout)` + scheduling overhead, not 
 
 ## Timeout Model
 
-Single enforcement point: `_run_scanner()` wraps each scanner call in `asyncio.wait_for(fn(target, budget), timeout=budget + GRACE)`.
+Single enforcement point: `_run_scanner()` wraps each scanner call in `asyncio.wait_for(fn(target, budget), timeout=budget + SCHEDULING_BUFFER)`.
 
-- `budget` = `settings.scanner_timeout` (default 10s)
-- `GRACE` = 2s (accounts for asyncio scheduling jitter)
+- `budget` = `settings.scanner_timeout` (default 10s) for light checks, `settings.deep_scanner_timeout` (default 30s) for deep checks
+- `SCHEDULING_BUFFER` = 0.5s (covers asyncio task-switch latency only — scanners must respect their own timeout budget internally)
 - Scanners pass `budget` to their I/O libraries as a soft hint
-- If a scanner exceeds budget + grace, `wait_for` cancels it and the orchestrator returns `CheckResult(error="timed out")`
+- If a scanner exceeds budget + buffer, `wait_for` cancels it and the orchestrator returns `CheckResult(error="timed out")`
 
 Scanners never call `wait_for` on themselves. See `docs/check_approach.md` for the full timeout contract.
 
@@ -212,7 +220,7 @@ Scanners never call `wait_for` on themselves. See `docs/check_approach.md` for t
 
 | Source | Scope | HTTP | Mechanism |
 |--------|-------|------|-----------|
-| Invalid/blocked target | Whole request | 400/422 | `HTTPException` before scanners run |
+| Invalid/blocked target | Whole request | 400/422 | Global exception handlers in `app.py` catch `BlockedTargetError`/`InvalidTargetError` |
 | Scanner not registered | Single check | 200 | `CheckResult(error=...)` |
 | Scanner timeout | Single check | 200 | `wait_for` cancels, `CheckResult(error=...)` |
 | Scanner exception | Single check | 200 | Catch `Exception`, `CheckResult(error=...)` |
@@ -264,6 +272,6 @@ Local dev: `docker-compose.yaml` mounts source as volume, enables `--reload`, ma
 
 **Deployed:** Live on Google Cloud Run (`infraprobe-tzhg2ptrea-uc.a.run.app`). Cloud Run handles auth via identity tokens. CI/CD pipeline pushes on every `main` merge.
 
-**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `tech_deep`, `blacklist` — all registered and accessible via both bundle and individual endpoints.
+**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `tech_deep`, `blacklist`, `web` — all registered and accessible via both bundle and individual endpoints. `web` is opt-in (not in default `LIGHT_CHECKS`).
 
 **Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting, app-level auth, structured logging, async job queue. Add when there's a concrete need. See `docs/check_approach.md` for the full list.

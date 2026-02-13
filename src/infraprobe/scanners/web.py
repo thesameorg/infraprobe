@@ -10,6 +10,7 @@ from typing import Any
 
 import httpx
 
+from infraprobe.http import fetch_with_fallback, scanner_client
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
 
 # ---------------------------------------------------------------------------
@@ -148,29 +149,6 @@ _MIXED_CONTENT_RE = re.compile(
     r"""(?:src|href|action)\s*=\s*["'](http://[^"']+)["']""",
     re.IGNORECASE,
 )
-
-
-# ---------------------------------------------------------------------------
-# Fetch helper
-# ---------------------------------------------------------------------------
-
-
-async def _fetch(target: str, client: httpx.AsyncClient) -> tuple[str, httpx.Response]:
-    """Try HTTPS first (short connect timeout), fall back to HTTP. Return (base_url, response)."""
-    host = target.split(":")[0] if ":" in target and not target.startswith("[") else target
-
-    if "://" in target:
-        resp = await client.get(target)
-        return target.rstrip("/"), resp
-
-    try:
-        resp = await client.get(f"https://{target}")
-        return f"https://{target}", resp
-    except httpx.HTTPError:
-        pass
-
-    resp = await client.get(f"http://{host}")
-    return f"http://{host}", resp
 
 
 # ---------------------------------------------------------------------------
@@ -429,16 +407,13 @@ async def _check_security_txt(
 
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     """Web security scan: CORS, exposed paths, mixed content, robots.txt, security.txt."""
-    connect_timeout = min(3.0, timeout)
-    timeouts = httpx.Timeout(timeout, connect=connect_timeout)
-
     findings: list[Finding] = []
     raw: dict[str, Any] = {}
 
     try:
-        async with httpx.AsyncClient(verify=False, timeout=timeouts, follow_redirects=True) as client:
+        async with scanner_client(timeout) as client:
             # Determine base URL (HTTPS first, HTTP fallback)
-            base_url, main_resp = await _fetch(target, client)
+            base_url, main_resp = await fetch_with_fallback(target, client)
             raw["url"] = str(main_resp.url)
             raw["status_code"] = main_resp.status_code
 

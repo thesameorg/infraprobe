@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     port: int = 8080
     scanner_timeout: float = 10.0
     deep_scanner_timeout: float = 30.0
+    rapidapi_proxy_secret: str | None = None
 
     model_config = {"env_prefix": "INFRAPROBE_", "env_file": ".env", "extra": "ignore"}
 
