@@ -1,3 +1,7 @@
+import logging
+import time
+import uuid
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -6,6 +10,7 @@ from infraprobe.api.scan import register_scanner
 from infraprobe.api.scan import router as scan_router
 from infraprobe.blocklist import BlockedTargetError, InvalidTargetError
 from infraprobe.config import settings
+from infraprobe.logging import request_ctx, setup_logging
 from infraprobe.models import CheckType
 from infraprobe.scanners import blacklist, tech, web
 from infraprobe.scanners import dns as dns_scanner
@@ -15,7 +20,74 @@ from infraprobe.scanners.deep import dns as dns_deep
 from infraprobe.scanners.deep import ssl as ssl_deep_scanner
 from infraprobe.scanners.deep import tech as tech_deep
 
+setup_logging()
+
+logger = logging.getLogger("infraprobe.app")
+
 app = FastAPI(title="InfraProbe", version="0.2.0")
+
+
+# ---------------------------------------------------------------------------
+# Request logging middleware (raw ASGI — no BaseHTTPMiddleware overhead)
+# ---------------------------------------------------------------------------
+
+
+class RequestLoggingMiddleware:
+    """Log every request with duration, status, and a unique request_id.
+
+    Implemented as raw ASGI middleware to avoid the overhead and quirks of
+    Starlette's BaseHTTPMiddleware.  Sets ``request_ctx`` so all downstream
+    loggers (including scanner code running under asyncio.gather) inherit
+    request-scoped fields automatically.
+    """
+
+    def __init__(self, app):  # type: ignore[no-untyped-def]
+        self.app = app
+
+    async def __call__(self, scope, receive, send):  # type: ignore[no-untyped-def]
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+
+        path = scope.get("path", "")
+
+        # Skip health endpoint to avoid noise from Cloud Run probes
+        if path == "/health":
+            return await self.app(scope, receive, send)
+
+        request_id = uuid.uuid4().hex[:8]
+        method = scope.get("method", "")
+        client = scope.get("client")
+        client_ip = client[0] if client else ""
+
+        ctx = {
+            "request_id": request_id,
+            "method": method,
+            "path": path,
+            "client_ip": client_ip,
+        }
+        token = request_ctx.set(ctx)
+
+        status_code = 500  # default in case send never fires
+        start = time.monotonic()
+
+        async def send_wrapper(message):  # type: ignore[no-untyped-def]
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            logger.info(
+                "request completed",
+                extra={"status_code": status_code, "duration_ms": duration_ms, "endpoint": path},
+            )
+            request_ctx.reset(token)
+
+
+app.add_middleware(RequestLoggingMiddleware)
 
 
 if settings.rapidapi_proxy_secret:
@@ -26,6 +98,7 @@ if settings.rapidapi_proxy_secret:
                 return await call_next(request)
             secret = request.headers.get("x-rapidapi-proxy-secret")
             if secret != settings.rapidapi_proxy_secret:
+                logger.warning("rapidapi auth rejected", extra={"path": request.url.path})
                 return JSONResponse(status_code=403, content={"detail": "Forbidden"})
             return await call_next(request)
 
@@ -34,11 +107,13 @@ if settings.rapidapi_proxy_secret:
 
 @app.exception_handler(BlockedTargetError)
 async def _blocked_target_handler(_request: Request, exc: BlockedTargetError) -> JSONResponse:
+    logger.warning("blocked target", extra={"error": str(exc)})
     return JSONResponse(status_code=400, content={"detail": str(exc)})
 
 
 @app.exception_handler(InvalidTargetError)
 async def _invalid_target_handler(_request: Request, exc: InvalidTargetError) -> JSONResponse:
+    logger.warning("invalid target", extra={"error": str(exc)})
     return JSONResponse(status_code=422, content={"detail": str(exc)})
 
 

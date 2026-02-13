@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from collections.abc import Callable, Coroutine
 
@@ -21,6 +22,7 @@ from infraprobe.scoring import calculate_score
 from infraprobe.target import ScanContext
 
 router = APIRouter()
+logger = logging.getLogger("infraprobe.scanner")
 
 # Scanner registry: maps check type → scan function
 # Each scanner is async def scan(target, timeout) -> CheckResult
@@ -42,11 +44,42 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
     fn = _SCANNERS.get(check_type)
     if fn is None:
         return CheckResult(check=check_type, error=f"Scanner {check_type} not registered")
+
+    start = time.monotonic()
     try:
-        return await asyncio.wait_for(fn(target, timeout), timeout=timeout + _SCHEDULING_BUFFER)
+        result = await asyncio.wait_for(fn(target, timeout), timeout=timeout + _SCHEDULING_BUFFER)
+        duration_ms = int((time.monotonic() - start) * 1000)
+        logger.info(
+            "check done",
+            extra={
+                "check": check_type,
+                "target": target,
+                "duration_ms": duration_ms,
+                "scanner_timeout": timeout,
+                "findings_count": len(result.findings),
+                "error": result.error,
+            },
+        )
+        return result
     except TimeoutError:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        logger.warning(
+            "check timeout",
+            extra={"check": check_type, "target": target, "duration_ms": duration_ms, "scanner_timeout": timeout},
+        )
         return CheckResult(check=check_type, error=f"Scanner {check_type} timed out after {timeout}s")
     except Exception as exc:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        logger.error(
+            "check error",
+            extra={
+                "check": check_type,
+                "target": target,
+                "duration_ms": duration_ms,
+                "scanner_timeout": timeout,
+                "error": str(exc),
+            },
+        )
         return CheckResult(check=check_type, error=f"Scanner {check_type} failed: {exc}")
 
 
@@ -93,13 +126,41 @@ async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResul
 @router.post("/scan")
 async def scan(request: ScanRequest) -> ScanResponse:
     contexts = [validate_target(raw) for raw in request.targets]
+    logger.info(
+        "scan started",
+        extra={
+            "targets": request.targets,
+            "checks": [str(c) for c in request.checks],
+            "resolved_ips": {str(ctx): list(ctx.resolved_ips) for ctx in contexts},
+        },
+    )
+    start = time.monotonic()
     target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
+    for tr in target_results:
+        logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
+    duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
     return ScanResponse(results=list(target_results))
 
 
 async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
     ctx = validate_target(request.target)
-    return await _scan_target(ctx, [check_type])
+    logger.info(
+        "check started",
+        extra={
+            "target": request.target,
+            "check": str(check_type),
+            "resolved_ips": list(ctx.resolved_ips),
+        },
+    )
+    start = time.monotonic()
+    result = await _scan_target(ctx, [check_type])
+    duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info(
+        "check request done",
+        extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
+    )
+    return result
 
 
 def _make_check_handler(ct: CheckType):
@@ -129,14 +190,38 @@ for _ct in CheckType:
 @router.post("/scan_domain")
 async def scan_domain(request: DomainScanRequest) -> ScanResponse:
     contexts = [validate_domain(raw) for raw in request.targets]
+    logger.info(
+        "scan started",
+        extra={
+            "targets": request.targets,
+            "checks": [str(c) for c in request.checks],
+            "resolved_ips": {str(ctx): list(ctx.resolved_ips) for ctx in contexts},
+        },
+    )
+    start = time.monotonic()
     target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
+    for tr in target_results:
+        logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
+    duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
     return ScanResponse(results=list(target_results))
 
 
 @router.post("/check_domain/{check_type}")
 async def check_domain(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
     ctx = validate_domain(request.target)
-    return await _scan_target(ctx, [check_type])
+    logger.info(
+        "check started",
+        extra={"target": request.target, "check": str(check_type), "resolved_ips": list(ctx.resolved_ips)},
+    )
+    start = time.monotonic()
+    result = await _scan_target(ctx, [check_type])
+    duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info(
+        "check request done",
+        extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
+    )
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +235,20 @@ async def scan_ip(request: IpScanRequest) -> ScanResponse:
     if invalid:
         raise InvalidTargetError(f"DNS checks not applicable to IP targets: {', '.join(sorted(invalid))}")
     contexts = [validate_ip(raw) for raw in request.targets]
+    logger.info(
+        "scan started",
+        extra={
+            "targets": request.targets,
+            "checks": [str(c) for c in request.checks],
+            "resolved_ips": {str(ctx): list(ctx.resolved_ips) for ctx in contexts},
+        },
+    )
+    start = time.monotonic()
     target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
+    for tr in target_results:
+        logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
+    duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
     return ScanResponse(results=list(target_results))
 
 
@@ -159,4 +257,15 @@ async def check_ip(check_type: CheckType, request: SingleCheckRequest) -> Target
     if check_type in DNS_ONLY_CHECKS:
         raise InvalidTargetError(f"Check type {check_type} not applicable to IP targets")
     ctx = validate_ip(request.target)
-    return await _scan_target(ctx, [check_type])
+    logger.info(
+        "check started",
+        extra={"target": request.target, "check": str(check_type), "resolved_ips": list(ctx.resolved_ips)},
+    )
+    start = time.monotonic()
+    result = await _scan_target(ctx, [check_type])
+    duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info(
+        "check request done",
+        extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
+    )
+    return result
