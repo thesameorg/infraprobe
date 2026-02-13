@@ -54,6 +54,7 @@ register_scanner(CheckType.WEB, web.scan)
 register_scanner(CheckType.SSL_DEEP, ssl_deep_scanner.scan)
 register_scanner(CheckType.DNS_DEEP, dns_deep.scan)
 register_scanner(CheckType.TECH_DEEP, tech_deep.scan)
+register_scanner(CheckType.BLACKLIST_DEEP, blacklist.scan_deep)
 
 # Register routes with /v1 prefix
 app.include_router(scan_router, prefix="/v1")

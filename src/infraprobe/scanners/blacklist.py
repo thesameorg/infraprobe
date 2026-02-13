@@ -9,10 +9,13 @@ from infraprobe.models import CheckResult, CheckType, Finding, Severity
 from infraprobe.target import parse_target
 
 # DNSBL zones with severity: (zone, severity, description)
-_DNSBLS: list[tuple[str, Severity, str]] = [
-    # Major lists — HIGH severity if listed
+_DNSBLS_MAJOR: list[tuple[str, Severity, str]] = [
     ("zen.spamhaus.org", Severity.HIGH, "Spamhaus ZEN (combined SBL/XBL/PBL)"),
     ("b.barracudacentral.org", Severity.HIGH, "Barracuda Reputation Block List"),
+]
+
+_DNSBLS_ALL: list[tuple[str, Severity, str]] = [
+    *_DNSBLS_MAJOR,
     ("bl.spamcop.net", Severity.HIGH, "SpamCop Blocking List"),
     # Mid-tier — MEDIUM severity
     ("dnsbl.sorbs.net", Severity.MEDIUM, "SORBS combined DNSBL"),
@@ -29,6 +32,9 @@ _DNSBLS: list[tuple[str, Severity, str]] = [
     ("noptr.spamrats.com", Severity.LOW, "SpamRATS No-PTR"),
     ("all.s5h.net", Severity.LOW, "s5h.net all"),
 ]
+
+# Per-zone timeout so one dead DNSBL can't stall the whole scanner
+_PER_ZONE_TIMEOUT = 3.0
 
 
 def _reverse_ip(ip: str) -> str:
@@ -58,42 +64,50 @@ async def _check_dnsbl(
     resolver: dns.asyncresolver.Resolver,
     reversed_ip: str,
     zone: str,
-) -> bool:
-    """Query a single DNSBL. Returns True if IP is listed (A record exists)."""
+) -> bool | None:
+    """Query a single DNSBL. Returns True if listed, False if clean, None on timeout."""
     query_name = f"{reversed_ip}.{zone}"
     try:
-        await resolver.resolve(query_name, "A")
+        await asyncio.wait_for(resolver.resolve(query_name, "A"), timeout=_PER_ZONE_TIMEOUT)
         return True  # Got a response = listed
+    except TimeoutError:
+        return None  # Zone timed out
     except (dns.asyncresolver.NXDOMAIN, dns.asyncresolver.NoAnswer, dns.resolver.NoNameservers):
         return False  # Not listed
     except dns.exception.DNSException:
         return False  # Query failed — treat as not listed
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def _run_blacklist(
+    check_type: CheckType,
+    zones: list[tuple[str, Severity, str]],
+    target: str,
+    timeout: float,
+) -> CheckResult:
     try:
         ip = _resolve_target_ip(target)
     except Exception as exc:
-        return CheckResult(check=CheckType.BLACKLIST, error=f"Cannot resolve {target} to IPv4: {exc}")
+        return CheckResult(check=check_type, error=f"Cannot resolve {target} to IPv4: {exc}")
 
     reversed_ip = _reverse_ip(ip)
     resolver = dns.asyncresolver.Resolver()
     resolver.lifetime = timeout
 
     # Fan out all DNSBL queries in parallel
-    tasks = [_check_dnsbl(resolver, reversed_ip, zone) for zone, _, _ in _DNSBLS]
+    tasks = [_check_dnsbl(resolver, reversed_ip, zone) for zone, _, _ in zones]
     try:
         results = await asyncio.gather(*tasks)
     except Exception as exc:
-        return CheckResult(check=CheckType.BLACKLIST, error=f"DNSBL lookup failed: {exc}")
+        return CheckResult(check=check_type, error=f"DNSBL lookup failed: {exc}")
 
     findings: list[Finding] = []
     listings: dict[str, str] = {}
 
-    for (zone, severity, description), listed in zip(_DNSBLS, results, strict=True):
-        status = "listed" if listed else "clean"
-        listings[zone] = status
-        if listed:
+    for (zone, severity, description), listed in zip(zones, results, strict=True):
+        if listed is None:
+            listings[zone] = "timeout"
+        elif listed:
+            listings[zone] = "listed"
             findings.append(
                 Finding(
                     severity=severity,
@@ -102,14 +116,17 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
                     details={"zone": zone, "ip": ip},
                 )
             )
+        else:
+            listings[zone] = "clean"
 
     listed_count = sum(1 for v in listings.values() if v == "listed")
+    checked_count = sum(1 for v in listings.values() if v != "timeout")
 
     if listed_count == 0:
         findings.append(
             Finding(
                 severity=Severity.INFO,
-                title=f"Not listed on any of {len(_DNSBLS)} blacklists",
+                title=f"Not listed on any of {checked_count} blacklists",
                 description=f"IP {ip} is clean across all checked DNSBL zones.",
             )
         )
@@ -119,7 +136,17 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
         "reversed_ip": reversed_ip,
         "listings": listings,
         "listed_count": listed_count,
-        "total_checked": len(_DNSBLS),
+        "total_checked": checked_count,
     }
 
-    return CheckResult(check=CheckType.BLACKLIST, findings=findings, raw=raw)
+    return CheckResult(check=check_type, findings=findings, raw=raw)
+
+
+async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+    """Light blacklist check — 2 major DNSBL sources (fast)."""
+    return await _run_blacklist(CheckType.BLACKLIST, _DNSBLS_MAJOR, target, timeout)
+
+
+async def scan_deep(target: str, timeout: float = 30.0) -> CheckResult:
+    """Deep blacklist check — all 15 DNSBL sources with per-zone timeout."""
+    return await _run_blacklist(CheckType.BLACKLIST_DEEP, _DNSBLS_ALL, target, timeout)

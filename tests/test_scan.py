@@ -262,7 +262,7 @@ def test_scan_all_checks(client):
 
 
 def test_scan_blacklist_google(client):
-    """Scan google.com DNSBL — should resolve IP and check all lists."""
+    """Light blacklist scan — 2 major DNSBL sources, should be fast."""
     resp = client.post("/v1/scan", json={"targets": ["google.com"], "checks": ["blacklist"]})
     assert resp.status_code == 200
 
@@ -275,11 +275,10 @@ def test_scan_blacklist_google(client):
 
     raw = bl_result["raw"]
     assert raw["ip"] != ""
-    assert raw["total_checked"] > 10
+    assert raw["total_checked"] == 2  # light = 2 major sources
     assert isinstance(raw["listings"], dict)
-    # All listings should be "listed" or "clean"
     for zone, status in raw["listings"].items():
-        assert status in ("listed", "clean"), f"Unexpected status for {zone}: {status}"
+        assert status in ("listed", "clean", "timeout"), f"Unexpected status for {zone}: {status}"
 
 
 def test_scan_blacklist_raw_structure(client):
@@ -303,6 +302,28 @@ def test_scan_blacklist_raw_structure(client):
     octets = raw["ip"].split(".")
     reversed_octets = raw["reversed_ip"].split(".")
     assert octets == list(reversed(reversed_octets))
+
+
+def test_scan_blacklist_deep(client):
+    """Deep blacklist scan — all 15 DNSBL sources with per-zone timeout."""
+    resp = client.post("/v1/scan", json={"targets": ["google.com"], "checks": ["blacklist_deep"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    bl_result = result["results"]["blacklist_deep"]
+    if bl_result["error"] and "timed out" in bl_result["error"]:
+        pytest.skip("DNSBL timed out (CI environment)")
+
+    assert bl_result["error"] is None
+
+    raw = bl_result["raw"]
+    assert raw["ip"] != ""
+    # Deep checks all 15 sources, some may timeout
+    assert raw["total_checked"] > 5
+    assert isinstance(raw["listings"], dict)
+    assert len(raw["listings"]) == 15  # all zones attempted
+    for zone, status in raw["listings"].items():
+        assert status in ("listed", "clean", "timeout"), f"Unexpected status for {zone}: {status}"
 
 
 # --- /v1/ API prefix tests ---

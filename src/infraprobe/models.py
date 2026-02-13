@@ -21,6 +21,7 @@ class CheckType(StrEnum):
     TECH = "tech"
     TECH_DEEP = "tech_deep"
     BLACKLIST = "blacklist"
+    BLACKLIST_DEEP = "blacklist_deep"
     WEB = "web"
 
 

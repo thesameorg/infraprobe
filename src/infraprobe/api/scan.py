@@ -50,7 +50,7 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
         return CheckResult(check=check_type, error=f"Scanner {check_type} failed: {exc}")
 
 
-_DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep"})
+_DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep", "blacklist_deep"})
 
 
 async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResult:
