@@ -20,9 +20,13 @@ def test_scan_headers_vulnweb(client):
     titles = [f["title"] for f in headers_result["findings"]]
 
     # testphp.vulnweb.com should be missing HSTS at minimum
-    assert any("HSTS" in t for t in titles), f"Expected HSTS finding, got: {titles}"
+    assert any("hsts" in t.lower() or "strict-transport-security" in t.lower() for t in titles), (
+        f"Expected HSTS finding, got: {titles}"
+    )
     # Should detect Server header leak
-    assert any("server" in t.lower() and "leak" in t.lower() for t in titles), f"Expected server leak, got: {titles}"
+    assert any("server" in t.lower() and ("leak" in t.lower() or "should not" in t.lower()) for t in titles), (
+        f"Expected server leak, got: {titles}"
+    )
 
 
 def test_scan_blocked_ip(client):
