@@ -1,18 +1,23 @@
 import asyncio
+import json
 import logging
 import time
 from collections.abc import Callable, Coroutine
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
+from fastapi.responses import Response
 
 from infraprobe.blocklist import InvalidTargetError, validate_domain, validate_ip, validate_target
 from infraprobe.config import settings
+from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
 from infraprobe.models import (
     DNS_ONLY_CHECKS,
     CheckResult,
     CheckType,
     DomainScanRequest,
     IpScanRequest,
+    OutputFormat,
     ScanRequest,
     ScanResponse,
     SingleCheckRequest,
@@ -23,6 +28,8 @@ from infraprobe.target import ScanContext
 
 router = APIRouter()
 logger = logging.getLogger("infraprobe.scanner")
+
+FormatParam = Annotated[OutputFormat, Query(alias="format")]
 
 # Scanner registry: maps check type → scan function
 # Each scanner is async def scan(target, timeout) -> CheckResult
@@ -118,13 +125,31 @@ async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResul
     )
 
 
+_SARIF_MEDIA_TYPE = "application/sarif+json"
+
+
+def _format_scan_response(result: ScanResponse, fmt: OutputFormat) -> ScanResponse | Response:
+    if fmt == OutputFormat.SARIF:
+        return Response(content=json.dumps(scan_response_to_sarif(result)), media_type=_SARIF_MEDIA_TYPE)
+    return result
+
+
+def _format_target_result(result: TargetResult, fmt: OutputFormat) -> TargetResult | Response:
+    if fmt == OutputFormat.SARIF:
+        return Response(content=json.dumps(target_result_to_sarif(result)), media_type=_SARIF_MEDIA_TYPE)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Existing endpoints (backward-compatible)
 # ---------------------------------------------------------------------------
 
 
 @router.post("/scan")
-async def scan(request: ScanRequest) -> ScanResponse:
+async def scan(
+    request: ScanRequest,
+    fmt: FormatParam = OutputFormat.JSON,
+) -> ScanResponse:
     contexts = [validate_target(raw) for raw in request.targets]
     logger.info(
         "scan started",
@@ -140,7 +165,7 @@ async def scan(request: ScanRequest) -> ScanResponse:
         logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
-    return ScanResponse(results=list(target_results))
+    return _format_scan_response(ScanResponse(results=list(target_results)), fmt)
 
 
 async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
@@ -164,8 +189,12 @@ async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> T
 
 
 def _make_check_handler(ct: CheckType):
-    async def handler(request: SingleCheckRequest) -> TargetResult:
-        return await _single_check(ct, request)
+    async def handler(
+        request: SingleCheckRequest,
+        fmt: FormatParam = OutputFormat.JSON,
+    ) -> TargetResult:
+        result = await _single_check(ct, request)
+        return _format_target_result(result, fmt)
 
     handler.__name__ = f"check_{ct.value}"
     return handler
@@ -188,7 +217,10 @@ for _ct in CheckType:
 
 
 @router.post("/scan_domain")
-async def scan_domain(request: DomainScanRequest) -> ScanResponse:
+async def scan_domain(
+    request: DomainScanRequest,
+    fmt: FormatParam = OutputFormat.JSON,
+) -> ScanResponse:
     contexts = [validate_domain(raw) for raw in request.targets]
     logger.info(
         "scan started",
@@ -204,11 +236,15 @@ async def scan_domain(request: DomainScanRequest) -> ScanResponse:
         logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
-    return ScanResponse(results=list(target_results))
+    return _format_scan_response(ScanResponse(results=list(target_results)), fmt)
 
 
 @router.post("/check_domain/{check_type}")
-async def check_domain(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
+async def check_domain(
+    check_type: CheckType,
+    request: SingleCheckRequest,
+    fmt: FormatParam = OutputFormat.JSON,
+) -> TargetResult:
     ctx = validate_domain(request.target)
     logger.info(
         "check started",
@@ -221,7 +257,7 @@ async def check_domain(check_type: CheckType, request: SingleCheckRequest) -> Ta
         "check request done",
         extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
     )
-    return result
+    return _format_target_result(result, fmt)
 
 
 # ---------------------------------------------------------------------------
@@ -230,7 +266,10 @@ async def check_domain(check_type: CheckType, request: SingleCheckRequest) -> Ta
 
 
 @router.post("/scan_ip")
-async def scan_ip(request: IpScanRequest) -> ScanResponse:
+async def scan_ip(
+    request: IpScanRequest,
+    fmt: FormatParam = OutputFormat.JSON,
+) -> ScanResponse:
     invalid = set(request.checks) & DNS_ONLY_CHECKS
     if invalid:
         raise InvalidTargetError(f"DNS checks not applicable to IP targets: {', '.join(sorted(invalid))}")
@@ -249,11 +288,15 @@ async def scan_ip(request: IpScanRequest) -> ScanResponse:
         logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
-    return ScanResponse(results=list(target_results))
+    return _format_scan_response(ScanResponse(results=list(target_results)), fmt)
 
 
 @router.post("/check_ip/{check_type}")
-async def check_ip(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
+async def check_ip(
+    check_type: CheckType,
+    request: SingleCheckRequest,
+    fmt: FormatParam = OutputFormat.JSON,
+) -> TargetResult:
     if check_type in DNS_ONLY_CHECKS:
         raise InvalidTargetError(f"Check type {check_type} not applicable to IP targets")
     ctx = validate_ip(request.target)
@@ -268,4 +311,4 @@ async def check_ip(check_type: CheckType, request: SingleCheckRequest) -> Target
         "check request done",
         extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
     )
-    return result
+    return _format_target_result(result, fmt)

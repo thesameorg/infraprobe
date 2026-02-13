@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from infraprobe import __version__
 from infraprobe.api.scan import register_scanner
 from infraprobe.api.scan import router as scan_router
 from infraprobe.blocklist import BlockedTargetError, InvalidTargetError
@@ -24,7 +25,7 @@ setup_logging()
 
 logger = logging.getLogger("infraprobe.app")
 
-app = FastAPI(title="InfraProbe", version="0.2.0")
+app = FastAPI(title="InfraProbe", version=__version__)
 
 
 # ---------------------------------------------------------------------------

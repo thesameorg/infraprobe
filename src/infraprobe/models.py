@@ -4,6 +4,11 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class OutputFormat(StrEnum):
+    JSON = "json"
+    SARIF = "sarif"
+
+
 class Severity(StrEnum):
     CRITICAL = "critical"
     HIGH = "high"
