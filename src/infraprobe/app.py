@@ -7,6 +7,7 @@ from infraprobe.scanners import blacklist, tech
 from infraprobe.scanners import dns as dns_scanner
 from infraprobe.scanners import headers_drheader as headers
 from infraprobe.scanners import ssl as ssl_scanner
+from infraprobe.scanners import web
 from infraprobe.scanners.deep import dns as dns_deep
 from infraprobe.scanners.deep import ssl as ssl_deep_scanner
 from infraprobe.scanners.deep import tech as tech_deep
@@ -19,6 +20,7 @@ register_scanner(CheckType.SSL, ssl_scanner.scan)
 register_scanner(CheckType.DNS, dns_scanner.scan)
 register_scanner(CheckType.TECH, tech.scan)
 register_scanner(CheckType.BLACKLIST, blacklist.scan)
+register_scanner(CheckType.WEB, web.scan)
 
 # Deep scanners (slower, more thorough)
 register_scanner(CheckType.SSL_DEEP, ssl_deep_scanner.scan)

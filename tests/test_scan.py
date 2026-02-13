@@ -426,3 +426,72 @@ def test_unversioned_scan_removed(client):
     """Unversioned /scan should no longer be routed — expect 404."""
     resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["headers"]})
     assert resp.status_code == 404
+
+
+# --- Web scanner tests ---
+
+
+def test_check_web_vulnweb(client):
+    """Web scan of vulnweb — should find CORS/path/security.txt findings."""
+    resp = client.post("/v1/check/web", json={"target": "testphp.vulnweb.com"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["target"] == "testphp.vulnweb.com"
+    web_result = data["results"]["web"]
+    assert web_result["error"] is None
+
+    # Should have findings (at minimum security.txt missing and path probe results)
+    assert len(web_result["findings"]) > 0
+    titles = [f["title"] for f in web_result["findings"]]
+    # Should report on CORS (either present or absent)
+    assert any("cors" in t.lower() for t in titles), f"Expected CORS finding, got: {titles}"
+
+    # Raw should have expected keys
+    raw = web_result["raw"]
+    assert "url" in raw
+    assert "exposed_paths" in raw
+    assert isinstance(raw["exposed_paths"], list)
+
+
+def test_check_web_example_com(client):
+    """Web scan of example.com — well-configured site."""
+    resp = client.post("/v1/check/web", json={"target": "example.com"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    web_result = data["results"]["web"]
+    assert web_result["error"] is None
+
+    raw = web_result["raw"]
+    assert raw["url"].startswith("http")
+    assert "status_code" in raw
+    assert "security_txt" in raw
+
+
+def test_check_web_cors_raw(client):
+    """Web scan should include CORS details in raw data."""
+    resp = client.post("/v1/check/web", json={"target": "example.com"})
+    assert resp.status_code == 200
+
+    raw = resp.json()["results"]["web"]["raw"]
+    assert "cors" in raw
+    assert "access_control_allow_origin" in raw["cors"]
+
+
+def test_scan_with_web_check(client):
+    """Web check can be included in a bundle scan."""
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["web"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    assert "web" in result["results"]
+    assert result["results"]["web"]["error"] is None
+
+
+def test_web_not_in_default_checks(client):
+    """Web check should NOT be in default light checks (it's opt-in)."""
+    resp = client.post("/v1/scan", json={"targets": ["example.com"]})
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert "web" not in result["results"]

@@ -21,6 +21,7 @@ class CheckType(StrEnum):
     TECH = "tech"
     TECH_DEEP = "tech_deep"
     BLACKLIST = "blacklist"
+    WEB = "web"
 
 
 # Default checks (light only — deep checks are opt-in)
