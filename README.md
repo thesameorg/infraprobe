@@ -22,6 +22,28 @@ Two endpoint styles, all under `/v1`:
 
 Results are scored (A+ through F) based on finding severity.
 
+## Output formats
+
+All endpoints accept a `?format=` query parameter:
+
+| Format | Content-Type | Description |
+|--------|-------------|-------------|
+| `json` (default) | `application/json` | Standard JSON response |
+| `sarif` | `application/sarif+json` | [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) for GitHub Security tab and CI/CD pipelines |
+
+```bash
+# Default JSON
+curl -X POST localhost:8080/v1/scan -d '{"targets":["example.com"],"checks":["headers"]}'
+
+# SARIF output
+curl -X POST "localhost:8080/v1/scan?format=sarif" -d '{"targets":["example.com"],"checks":["headers"]}'
+
+# Works on single-check endpoints too
+curl -X POST "localhost:8080/v1/check/headers?format=sarif" -d '{"target":"example.com"}'
+```
+
+Error responses (400, 422) are always JSON regardless of the format parameter.
+
 ## Local development
 
 ```bash
