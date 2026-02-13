@@ -12,17 +12,7 @@ from collections import OrderedDict
 import checkdmarc
 
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
-
-
-def _strip_port(target: str) -> str:
-    """Remove port from target if present."""
-    if target.startswith("["):
-        return target
-    if ":" in target:
-        host, _, maybe_port = target.rpartition(":")
-        if maybe_port.isdigit():
-            return host
-    return target
+from infraprobe.target import parse_target
 
 
 def _run_checkdmarc(domain: str, timeout: float) -> OrderedDict:
@@ -257,7 +247,7 @@ def _add_positive_findings(findings: list[Finding], raw: dict) -> None:
 
 
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:
-    domain = _strip_port(target)
+    domain = parse_target(target).host
 
     try:
         data = await asyncio.to_thread(_run_checkdmarc, domain, timeout)

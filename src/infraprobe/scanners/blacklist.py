@@ -6,6 +6,7 @@ import dns.exception
 import dns.resolver
 
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
+from infraprobe.target import parse_target
 
 # DNSBL zones with severity: (zone, severity, description)
 _DNSBLS: list[tuple[str, Severity, str]] = [
@@ -37,18 +38,7 @@ def _reverse_ip(ip: str) -> str:
 
 def _resolve_target_ip(target: str) -> str:
     """Resolve target to an IPv4 address synchronously (for initial resolution)."""
-    # Strip port if present
-    host = target
-    if host.startswith("["):
-        bracket_end = host.find("]")
-        host = host[1:bracket_end]
-    elif ":" in host:
-        parts = host.rsplit(":", 1)
-        try:
-            int(parts[1])
-            host = parts[0]
-        except ValueError:
-            pass
+    host = parse_target(target).host
 
     # Try to parse as IP first
     try:

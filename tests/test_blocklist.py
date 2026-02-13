@@ -1,6 +1,7 @@
 import pytest
 
-from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, parse_target, validate_target
+from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, validate_domain, validate_ip, validate_target
+from infraprobe.target import parse_target
 
 
 class TestParseTarget:
@@ -35,19 +36,36 @@ class TestParseTarget:
     def test_bare_ipv4_with_port(self):
         assert parse_target("93.184.216.34:8080") == ("93.184.216.34", 8080)
 
+    def test_is_ip_for_ipv4(self):
+        t = parse_target("93.184.216.34")
+        assert t.is_ip is True
+
+    def test_is_ip_for_domain(self):
+        t = parse_target("example.com")
+        assert t.is_ip is False
+
+    def test_is_ip_for_ipv6(self):
+        t = parse_target("::1")
+        assert t.is_ip is True
+
 
 class TestValidateTarget:
     def test_public_domain(self):
-        result = validate_target("example.com")
-        assert result == "example.com"
+        ctx = validate_target("example.com")
+        assert str(ctx) == "example.com"
+        assert ctx.is_ip is False
+        assert len(ctx.resolved_ips) > 0
 
     def test_public_ip(self):
-        result = validate_target("93.184.216.34")
-        assert result == "93.184.216.34"
+        ctx = validate_target("93.184.216.34")
+        assert str(ctx) == "93.184.216.34"
+        assert ctx.is_ip is True
+        assert ctx.resolved_ips == ("93.184.216.34",)
 
     def test_domain_with_port(self):
-        result = validate_target("example.com:443")
-        assert result == "example.com:443"
+        ctx = validate_target("example.com:443")
+        assert str(ctx) == "example.com:443"
+        assert ctx.port == 443
 
     @pytest.mark.parametrize(
         "ip",
@@ -86,3 +104,25 @@ class TestValidateTarget:
     def test_invalid_domain(self):
         with pytest.raises(InvalidTargetError):
             validate_target("this-domain-definitely-does-not-exist-xyz123.com")
+
+
+class TestValidateDomain:
+    def test_accepts_domain(self):
+        ctx = validate_domain("example.com")
+        assert ctx.is_ip is False
+        assert ctx.host == "example.com"
+
+    def test_rejects_ip(self):
+        with pytest.raises(InvalidTargetError, match="Expected a domain"):
+            validate_domain("93.184.216.34")
+
+
+class TestValidateIp:
+    def test_accepts_ip(self):
+        ctx = validate_ip("93.184.216.34")
+        assert ctx.is_ip is True
+        assert ctx.host == "93.184.216.34"
+
+    def test_rejects_domain(self):
+        with pytest.raises(InvalidTargetError, match="Expected an IP"):
+            validate_ip("example.com")

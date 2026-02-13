@@ -4,10 +4,21 @@ from collections.abc import Callable, Coroutine
 
 from fastapi import APIRouter
 
-from infraprobe.blocklist import validate_target
+from infraprobe.blocklist import InvalidTargetError, validate_domain, validate_ip, validate_target
 from infraprobe.config import settings
-from infraprobe.models import CheckResult, CheckType, ScanRequest, ScanResponse, SingleCheckRequest, TargetResult
+from infraprobe.models import (
+    DNS_ONLY_CHECKS,
+    CheckResult,
+    CheckType,
+    DomainScanRequest,
+    IpScanRequest,
+    ScanRequest,
+    ScanResponse,
+    SingleCheckRequest,
+    TargetResult,
+)
 from infraprobe.scoring import calculate_score
+from infraprobe.target import ScanContext
 
 router = APIRouter()
 
@@ -42,13 +53,14 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
 _DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep"})
 
 
-async def _scan_target(target: str, checks: list[CheckType]) -> TargetResult:
+async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResult:
     start = time.monotonic()
+    target_str = str(ctx)
 
     tasks = [
         _run_scanner(
             ct,
-            target,
+            target_str,
             settings.deep_scanner_timeout if ct in _DEEP_CHECKS else settings.scanner_timeout,
         )
         for ct in checks
@@ -65,7 +77,7 @@ async def _scan_target(target: str, checks: list[CheckType]) -> TargetResult:
     duration_ms = int((time.monotonic() - start) * 1000)
 
     return TargetResult(
-        target=target,
+        target=target_str,
         score=score,
         summary=summary,
         results=results_map,
@@ -73,16 +85,21 @@ async def _scan_target(target: str, checks: list[CheckType]) -> TargetResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# Existing endpoints (backward-compatible)
+# ---------------------------------------------------------------------------
+
+
 @router.post("/scan")
 async def scan(request: ScanRequest) -> ScanResponse:
-    validated = [validate_target(raw) for raw in request.targets]
-    target_results = await asyncio.gather(*[_scan_target(t, request.checks) for t in validated])
+    contexts = [validate_target(raw) for raw in request.targets]
+    target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
     return ScanResponse(results=list(target_results))
 
 
 async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
-    target = validate_target(request.target)
-    return await _scan_target(target, [check_type])
+    ctx = validate_target(request.target)
+    return await _scan_target(ctx, [check_type])
 
 
 def _make_check_handler(ct: CheckType):
@@ -102,3 +119,44 @@ for _ct in CheckType:
         router.add_api_route(f"/check_deep/{_slug}", _handler, methods=["POST"], response_model=TargetResult)
     else:
         router.add_api_route(f"/check/{_ct.value}", _handler, methods=["POST"], response_model=TargetResult)
+
+
+# ---------------------------------------------------------------------------
+# Domain-specific endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post("/scan_domain")
+async def scan_domain(request: DomainScanRequest) -> ScanResponse:
+    contexts = [validate_domain(raw) for raw in request.targets]
+    target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
+    return ScanResponse(results=list(target_results))
+
+
+@router.post("/check_domain/{check_type}")
+async def check_domain(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
+    ctx = validate_domain(request.target)
+    return await _scan_target(ctx, [check_type])
+
+
+# ---------------------------------------------------------------------------
+# IP-specific endpoints
+# ---------------------------------------------------------------------------
+
+
+@router.post("/scan_ip")
+async def scan_ip(request: IpScanRequest) -> ScanResponse:
+    invalid = set(request.checks) & DNS_ONLY_CHECKS
+    if invalid:
+        raise InvalidTargetError(f"DNS checks not applicable to IP targets: {', '.join(sorted(invalid))}")
+    contexts = [validate_ip(raw) for raw in request.targets]
+    target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
+    return ScanResponse(results=list(target_results))
+
+
+@router.post("/check_ip/{check_type}")
+async def check_ip(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
+    if check_type in DNS_ONLY_CHECKS:
+        raise InvalidTargetError(f"Check type {check_type} not applicable to IP targets")
+    ctx = validate_ip(request.target)
+    return await _scan_target(ctx, [check_type])

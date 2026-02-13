@@ -1,6 +1,6 @@
 import ipaddress
-import socket
-from urllib.parse import urlparse
+
+from infraprobe.target import ScanContext, Target, build_context, parse_target
 
 _BLOCKED_NETWORKS = [
     # IPv4 private / reserved
@@ -39,30 +39,18 @@ class InvalidTargetError(Exception):
     pass
 
 
-def parse_target(raw: str) -> tuple[str, int | None]:
-    """Extract host and optional port from target string.
-
-    Delegates to urllib.parse.urlparse for all parsing — handles schemes,
-    IPv6 brackets, ports, and encoded characters correctly.
-    """
-    raw = raw.strip()
-    if "://" not in raw:
-        # Bare IPv6 addresses (contain ":" but no brackets) need wrapping
-        # so urlparse can parse them correctly.
-        if ":" in raw and not raw.startswith("["):
-            try:
-                ipaddress.ip_address(raw)
-                raw = f"https://[{raw}]"
-            except ValueError:
-                # Might be host:port — let urlparse handle it.
-                raw = f"https://{raw}"
-        else:
-            raw = f"https://{raw}"
-    parsed = urlparse(raw)
-    host = parsed.hostname
-    if not host:
-        raise InvalidTargetError(f"Cannot extract host from target: {raw}")
-    return host, parsed.port
+# Re-export so existing ``from infraprobe.blocklist import ...`` works.
+__all__ = [
+    "BlockedTargetError",
+    "InvalidTargetError",
+    "ScanContext",
+    "Target",
+    "build_context",
+    "parse_target",
+    "validate_domain",
+    "validate_ip",
+    "validate_target",
+]
 
 
 def _is_blocked_ip(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -80,28 +68,38 @@ def _parse_ip_strict(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address
     return ipaddress.ip_address(host)
 
 
-def validate_target(raw: str) -> str:
-    """Validate and normalize a scan target. Raises on blocked/invalid targets."""
-    host, port = parse_target(raw)
+def validate_target(raw: str) -> ScanContext:
+    """Validate and normalize a scan target. Returns ScanContext with pre-resolved IPs.
 
-    # Check if host is an IP (handles decimal, hex, octal via ipaddress)
-    try:
-        addr = _parse_ip_strict(host)
-        if _is_blocked_ip(addr):
-            raise BlockedTargetError(f"Target {host} is in a blocked range")
-    except ValueError:
-        # Not an IP — it's a domain.  Resolve and check all resulting IPs.
+    Raises BlockedTargetError for private/reserved IPs, InvalidTargetError for
+    unresolvable domains or unparseable targets.
+    """
+    ctx = build_context(raw)
+
+    for ip_str in ctx.resolved_ips:
         try:
-            infos = socket.getaddrinfo(host, port or 443, proto=socket.IPPROTO_TCP)
-        except socket.gaierror as exc:
-            raise InvalidTargetError(f"Cannot resolve {host}: {exc}") from exc
-        for info in infos:
-            ip_str = str(info[4][0])
-            try:
-                addr = _parse_ip_strict(ip_str)
-            except ValueError:
-                continue
-            if _is_blocked_ip(addr):
-                raise BlockedTargetError(f"Target {host} resolves to blocked IP {ip_str}") from None
+            addr = _parse_ip_strict(ip_str)
+        except ValueError:
+            continue
+        if _is_blocked_ip(addr):
+            if ctx.is_ip:
+                raise BlockedTargetError(f"Target {ctx.host} is in a blocked range")
+            raise BlockedTargetError(f"Target {ctx.host} resolves to blocked IP {ip_str}")
 
-    return f"{host}:{port}" if port else host
+    return ctx
+
+
+def validate_domain(raw: str) -> ScanContext:
+    """Validate that target is a domain (not an IP). Returns ScanContext."""
+    ctx = validate_target(raw)
+    if ctx.is_ip:
+        raise InvalidTargetError(f"Expected a domain, got IP address: {ctx.host}")
+    return ctx
+
+
+def validate_ip(raw: str) -> ScanContext:
+    """Validate that target is an IP address (not a domain). Returns ScanContext."""
+    ctx = validate_target(raw)
+    if not ctx.is_ip:
+        raise InvalidTargetError(f"Expected an IP address, got domain: {ctx.host}")
+    return ctx

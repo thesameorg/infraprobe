@@ -6,24 +6,10 @@ import dns.rdatatype
 import dns.resolver
 
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
+from infraprobe.target import parse_target
 
 # Record types to query — order doesn't matter, all run in parallel
 _RECORD_TYPES = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "CAA"]
-
-
-def _parse_target(target: str) -> str:
-    """Strip port from target if present — DNS queries don't use ports."""
-    if target.startswith("["):
-        bracket_end = target.find("]")
-        return target[1:bracket_end]
-    if ":" in target:
-        host, _, rest = target.rpartition(":")
-        try:
-            int(rest)
-            return host
-        except ValueError:
-            pass
-    return target
 
 
 async def _resolve(resolver: dns.asyncresolver.Resolver, domain: str, rdtype: str) -> list[str]:
@@ -143,7 +129,7 @@ def _check_caa(caa_records: list[str]) -> list[Finding]:
 
 
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:
-    domain = _parse_target(target)
+    domain = parse_target(target).host
 
     try:
         resolver = dns.asyncresolver.Resolver()

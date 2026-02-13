@@ -6,30 +6,10 @@ from cryptography import x509
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
+from infraprobe.target import parse_target
 
 # Ciphers considered weak — match by substring in the cipher name
 _WEAK_CIPHER_FRAGMENTS = ("RC4", "DES", "3DES", "EXPORT", "NULL", "anon")
-
-
-def _parse_target(target: str) -> tuple[str, int]:
-    """Extract host and port from target string. Default port is 443."""
-    if target.startswith("["):
-        # IPv6 with brackets: [::1]:443
-        bracket_end = target.find("]")
-        host = target[1:bracket_end]
-        rest = target[bracket_end + 1 :]
-        if rest.startswith(":"):
-            return host, int(rest[1:])
-        return host, 443
-
-    if target.count(":") == 1:
-        host, port_str = target.rsplit(":", 1)
-        try:
-            return host, int(port_str)
-        except ValueError:
-            pass
-
-    return target, 443
 
 
 async def _connect_tls(host: str, port: int, timeout: float) -> tuple[bytes, str, tuple[str, str, int]]:
@@ -184,7 +164,8 @@ def _check_cipher(cipher_info: tuple[str, str, int]) -> list[Finding]:
 
 
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:
-    host, port = _parse_target(target)
+    host, port = parse_target(target)
+    port = port or 443
 
     try:
         der_cert, protocol_version, cipher_info = await _connect_tls(host, port, timeout)

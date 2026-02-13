@@ -2,48 +2,61 @@
 
 Uses the official Wappalyzer fingerprint database (1,500+ technologies).
 Runs in 'fast' mode (single HTTP request, no browser dependency).
+We handle HTTP fetching ourselves (with proper timeouts) and feed the
+response to wappalyzer's analyze_from_response() directly.
 """
 
 from __future__ import annotations
 
 import asyncio
 
+import httpx
+
+from infraprobe.http import fetch_with_fallback, scanner_client
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
+
+
+class _ResponseAdapter:
+    """Minimal adapter so httpx.Response satisfies wappalyzer's analyze_from_response."""
+
+    def __init__(self, resp: httpx.Response) -> None:
+        self.text = resp.text
+        self.url = str(resp.url)
+        self.headers = dict(resp.headers)
+        self._cookies = {k: v for k, v in resp.cookies.items()}
+        self.raw = None  # certIssuer parser accesses .raw but handles exceptions
+
+    class _CookieDict(dict):
+        def get_dict(self) -> dict:
+            return dict(self)
+
+    @property
+    def cookies(self) -> _CookieDict:
+        return self._CookieDict(self._cookies)
+
 
 # CMS names that warrant a security finding
 _CMS_FINDINGS = frozenset({"WordPress", "Joomla", "Drupal", "Magento", "PrestaShop"})
 
 
-def _run_wappalyzer(url: str) -> dict:
-    """Run wappalyzer analysis synchronously (called via asyncio.to_thread)."""
-    from wappalyzer import analyze
+def _analyze_response(adapted: _ResponseAdapter) -> dict:
+    """Run wappalyzer analysis on a pre-fetched response (called via asyncio.to_thread)."""
+    from wappalyzer.core.analyzer import analyze_from_response
+    from wappalyzer.core.utils import create_result
 
-    return analyze(url=url, scan_type="fast")
+    techs = analyze_from_response(adapted, scan_type="fast")
+    return create_result(techs)
 
 
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:
-    host = target.split(":")[0] if ":" in target and not target.startswith("[") else target
-
-    url = target if "://" in target else f"https://{host}"
-
     try:
-        result = await asyncio.to_thread(_run_wappalyzer, url)
-    except Exception:
-        # HTTPS failed, try HTTP
-        if not target.startswith("http"):
-            try:
-                url = f"http://{host}"
-                result = await asyncio.to_thread(_run_wappalyzer, url)
-            except Exception as exc:
-                return CheckResult(check=CheckType.TECH_DEEP, error=f"Cannot analyze {target}: {exc}")
-        else:
-            return CheckResult(check=CheckType.TECH_DEEP, error=f"Cannot analyze {target}")
+        async with scanner_client(timeout) as client:
+            url, resp = await fetch_with_fallback(target, client)
+    except httpx.HTTPError as exc:
+        return CheckResult(check=CheckType.TECH_DEEP, error=f"Cannot analyze {target}: {exc}")
 
-    # Wappalyzer returns {url: {tech_name: {version, confidence, categories, groups}}}
-    techs: dict = {}
-    for _url_key, tech_map in result.items():
-        techs = tech_map
-        break
+    adapted = _ResponseAdapter(resp)
+    techs = await asyncio.to_thread(_analyze_response, adapted)
 
     findings: list[Finding] = []
     detected: list[dict] = []

@@ -13,6 +13,8 @@ Every scanner is a single async function:
 async def scan(target: str, timeout: float) -> CheckResult
 ```
 
+The `target` string is the normalized host (or host:port). A `ScanContext` (from `infraprobe.target`) is available in the orchestrator with pre-resolved IPs and `is_ip` flag, but scanners receive the target as a plain string.
+
 ### Rules
 
 1. **`timeout` is a budget, not a guarantee.** Pass it to I/O calls (httpx, dns, ssl) as a hint. The orchestrator enforces the hard deadline — scanners do NOT call `asyncio.wait_for` on themselves.

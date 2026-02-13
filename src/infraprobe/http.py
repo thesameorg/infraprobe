@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import httpx
 
+from infraprobe.target import parse_target
+
 
 def scanner_client(timeout: float, *, follow_redirects: bool = True) -> httpx.AsyncClient:
     """Create a standard async HTTP client for scanners.
@@ -27,7 +29,7 @@ async def fetch_with_fallback(target: str, client: httpx.AsyncClient) -> tuple[s
     Returns ``(base_url, response)`` where *base_url* is the scheme + host
     that succeeded (no trailing slash).
     """
-    host = target.split(":")[0] if ":" in target and not target.startswith("[") else target
+    host = parse_target(target).host
 
     # Already has a scheme — use as-is.
     if "://" in target:

@@ -505,3 +505,98 @@ def test_web_not_in_default_checks(client):
     assert resp.status_code == 200
     result = resp.json()["results"][0]
     assert "web" not in result["results"]
+
+
+# --- Domain endpoint tests ---
+
+
+def test_scan_domain_works(client):
+    """POST /v1/scan_domain — domain scan with default checks."""
+    resp = client.post("/v1/scan_domain", json={"targets": ["testphp.vulnweb.com"]})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    result = data["results"][0]
+    assert result["target"] == "testphp.vulnweb.com"
+    assert result["score"] is not None
+    # Default domain checks include dns
+    assert "dns" in result["results"]
+
+
+def test_scan_domain_rejects_ip(client):
+    """POST /v1/scan_domain with an IP — should return 422."""
+    resp = client.post("/v1/scan_domain", json={"targets": ["93.184.216.34"]})
+    assert resp.status_code == 422
+    assert "expected a domain" in resp.json()["detail"].lower()
+
+
+def test_check_domain_headers(client):
+    """POST /v1/check_domain/headers — single domain check."""
+    resp = client.post("/v1/check_domain/headers", json={"target": "testphp.vulnweb.com"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["target"] == "testphp.vulnweb.com"
+    assert "headers" in data["results"]
+    assert data["results"]["headers"]["error"] is None
+
+
+def test_check_domain_rejects_ip(client):
+    """POST /v1/check_domain/headers with an IP — should return 422."""
+    resp = client.post("/v1/check_domain/headers", json={"target": "93.184.216.34"})
+    assert resp.status_code == 422
+
+
+# --- IP endpoint tests ---
+
+
+def test_scan_ip_works(client):
+    """POST /v1/scan_ip — IP scan with default checks (no DNS)."""
+    resp = client.post("/v1/scan_ip", json={"targets": ["44.228.249.3"]})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    result = data["results"][0]
+    assert result["target"] == "44.228.249.3"
+    assert result["score"] is not None
+    # IP default checks should NOT include dns
+    assert "dns" not in result["results"]
+    # Should include ssl and headers
+    assert "ssl" in result["results"]
+    assert "headers" in result["results"]
+
+
+def test_scan_ip_rejects_domain(client):
+    """POST /v1/scan_ip with a domain — should return 422."""
+    resp = client.post("/v1/scan_ip", json={"targets": ["testphp.vulnweb.com"]})
+    assert resp.status_code == 422
+    assert "expected an ip" in resp.json()["detail"].lower()
+
+
+def test_scan_ip_rejects_dns_check(client):
+    """POST /v1/scan_ip with dns check — should return 422."""
+    resp = client.post("/v1/scan_ip", json={"targets": ["44.228.249.3"], "checks": ["dns"]})
+    assert resp.status_code == 422
+    assert "dns" in resp.json()["detail"].lower()
+
+
+def test_check_ip_ssl(client):
+    """POST /v1/check_ip/ssl — single IP check."""
+    resp = client.post("/v1/check_ip/ssl", json={"target": "44.228.249.3"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["target"] == "44.228.249.3"
+    assert "ssl" in data["results"]
+
+
+def test_check_ip_rejects_dns(client):
+    """POST /v1/check_ip/dns — should return 422."""
+    resp = client.post("/v1/check_ip/dns", json={"target": "44.228.249.3"})
+    assert resp.status_code == 422
+
+
+def test_check_ip_rejects_domain(client):
+    """POST /v1/check_ip/headers with a domain — should return 422."""
+    resp = client.post("/v1/check_ip/headers", json={"target": "testphp.vulnweb.com"})
+    assert resp.status_code == 422

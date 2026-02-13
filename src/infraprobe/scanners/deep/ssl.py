@@ -22,6 +22,7 @@ from sslyze import (
 )
 
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
+from infraprobe.target import parse_target
 
 # ---------------------------------------------------------------------------
 # Scan configuration
@@ -44,25 +45,6 @@ _WEAK_CIPHER_FRAGMENTS = ("RC4", "DES", "3DES", "EXPORT", "NULL", "anon")
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-def _parse_target(target: str) -> tuple[str, int]:
-    """Extract host and port from target string. Default port is 443."""
-    if target.startswith("["):
-        bracket_end = target.find("]")
-        host = target[1:bracket_end]
-        rest = target[bracket_end + 1 :]
-        if rest.startswith(":"):
-            return host, int(rest[1:])
-        return host, 443
-
-    if target.count(":") == 1:
-        host, port_str = target.rsplit(":", 1)
-        try:
-            return host, int(port_str)
-        except ValueError:
-            pass
-
-    return target, 443
 
 
 def _run_sslyze(host: str, port: int) -> ServerScanResult:
@@ -419,7 +401,8 @@ def _add_positive_findings(findings: list[Finding], raw: dict) -> None:
 
 
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:
-    host, port = _parse_target(target)
+    host, port = parse_target(target)
+    port = port or 443
 
     try:
         result = await asyncio.to_thread(_run_sslyze, host, port)
