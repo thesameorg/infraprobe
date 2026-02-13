@@ -337,6 +337,82 @@ def _check_vulnerabilities(scan_result: Any, findings: list[Finding], raw: dict)
     raw["vulnerabilities"] = vulns
 
 
+def _add_positive_findings(findings: list[Finding], raw: dict) -> None:
+    """Add INFO-level findings for things that are configured correctly."""
+    # Valid certificate with plenty of time
+    days = raw.get("days_until_expiry", 0)
+    if days > 30:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"Valid certificate ({days} days until expiry)",
+                description=f"Certificate is valid and expires on {raw.get('not_valid_after', 'unknown')}.",
+            )
+        )
+
+    # Strong key
+    key_type = raw.get("key_type", "")
+    key_bits = raw.get("key_bits", 0)
+    if key_type == "RSA" and key_bits >= 2048:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"Strong RSA key ({key_bits}-bit)",
+                description="RSA key meets the recommended minimum of 2048 bits.",
+            )
+        )
+    elif key_type == "EC":
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"EC key ({key_bits}-bit)",
+                description="Elliptic curve key provides strong security with smaller key size.",
+            )
+        )
+
+    # TLS 1.3 support
+    protocols = raw.get("supported_protocols", [])
+    if "TLS 1.3" in protocols:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="TLS 1.3 supported",
+                description="Server supports TLS 1.3, the latest and most secure protocol version.",
+            )
+        )
+
+    # No known vulnerabilities
+    vulns = raw.get("vulnerabilities", {})
+    if vulns and not any(v is True for v in vulns.values() if isinstance(v, bool)):
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="No known TLS vulnerabilities",
+                description="Server is not vulnerable to Heartbleed, CCS injection, or TLS compression attacks.",
+            )
+        )
+
+    # Hostname matches
+    if raw.get("hostname_matches"):
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="Certificate matches hostname",
+                description="The certificate's SAN entries match the target hostname.",
+            )
+        )
+
+    # EV certificate
+    if raw.get("is_ev"):
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="Extended Validation (EV) certificate",
+                description="The certificate is an EV certificate, providing the highest level of identity assurance.",
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # Main scan
 # ---------------------------------------------------------------------------
@@ -368,5 +444,8 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     _check_certificate(sr, host, findings, raw)
     _check_protocols(sr, findings, raw)
     _check_vulnerabilities(sr, findings, raw)
+
+    # --- Positive findings ---
+    _add_positive_findings(findings, raw)
 
     return CheckResult(check=CheckType.SSL_DEEP, findings=findings, raw=raw)

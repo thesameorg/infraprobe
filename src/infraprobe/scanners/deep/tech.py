@@ -86,6 +86,36 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
                 )
             )
 
+    # --- Positive findings for security-relevant tech ---
+    categories_seen: set[str] = set()
+    for tech in detected:
+        for cat in tech.get("categories", []):
+            categories_seen.add(cat.lower() if isinstance(cat, str) else "")
+
+    cdn_names = [t["name"] for t in detected if any("cdn" in str(c).lower() for c in t.get("categories", []))]
+    if cdn_names:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"CDN detected ({', '.join(cdn_names)})",
+                description="A CDN provides DDoS protection and improved performance.",
+            )
+        )
+
+    waf_names = [
+        t["name"]
+        for t in detected
+        if any("firewall" in str(c).lower() or "waf" in str(c).lower() for c in t.get("categories", []))
+    ]
+    if waf_names:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"WAF detected ({', '.join(waf_names)})",
+                description="A Web Application Firewall helps protect against common attacks.",
+            )
+        )
+
     raw = {
         "url": url,
         "detected": detected,

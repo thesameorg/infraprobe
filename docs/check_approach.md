@@ -21,7 +21,7 @@ async def scan(target: str, timeout: float) -> CheckResult
 
 3. **Never raise.** Catch all exceptions internally and return `CheckResult(check=..., error="message")`. The orchestrator has a safety net, but scanners should not rely on it.
 
-4. **Findings = problems only.** Don't create findings for "header X is present". Only report what needs attention. Use the `raw` dict for neutral/diagnostic data (response headers, cert details, DNS records).
+4. **Findings = problems + positive confirmations.** Report issues that need attention (CRITICAL through LOW), and add `Severity.INFO` findings for things configured correctly (e.g. "TLS 1.3 supported", "DNSSEC enabled", "DMARC policy is reject"). This lets users see what's right, not just what's wrong. Use the `raw` dict for neutral/diagnostic data (response headers, cert details, DNS records).
 
 5. **Stateless.** No module-level state, no connection pools, no caches. Receive target + timeout, return result. If shared HTTP clients are needed later, they'll be injected via the function signature.
 

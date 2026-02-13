@@ -201,6 +201,61 @@ def _analyze_results(data: OrderedDict, findings: list[Finding], raw: dict) -> N
         )
 
 
+def _add_positive_findings(findings: list[Finding], raw: dict) -> None:
+    """Add INFO-level findings for things that are configured correctly."""
+    # DNSSEC enabled
+    if raw.get("dnssec"):
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="DNSSEC enabled",
+                description="Domain has DNSSEC, protecting DNS responses from spoofing.",
+            )
+        )
+
+    # SPF valid
+    if raw.get("spf_valid"):
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="SPF record valid",
+                description="SPF record passes RFC 7208 validation.",
+            )
+        )
+
+    # DMARC enforced
+    policy = raw.get("dmarc_policy", "")
+    if policy in ("quarantine", "reject"):
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"DMARC policy is '{policy}'",
+                description=f"DMARC is set to '{policy}', actively protecting against email spoofing.",
+            )
+        )
+
+    # DMARC reporting configured
+    if raw.get("dmarc_rua"):
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title="DMARC aggregate reporting configured",
+                description="DMARC rua tag is set, enabling aggregate report delivery.",
+            )
+        )
+
+    # Multiple nameservers
+    ns = raw.get("ns", [])
+    if len(ns) >= 2:
+        findings.append(
+            Finding(
+                severity=Severity.INFO,
+                title=f"{len(ns)} nameservers configured",
+                description="Multiple nameservers provide DNS redundancy.",
+            )
+        )
+
+
 async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     domain = _strip_port(target)
 
@@ -213,5 +268,6 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     raw: dict = {}
 
     _analyze_results(data, findings, raw)
+    _add_positive_findings(findings, raw)
 
     return CheckResult(check=CheckType.DNS_DEEP, findings=findings, raw=raw)
