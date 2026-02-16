@@ -48,3 +48,7 @@ python-version = "3.12"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "integration: tests that hit real external targets (require network)",
+    "slow: tests that take a long time to run",
+]

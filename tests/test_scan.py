@@ -2,6 +2,8 @@
 
 import pytest
 
+pytestmark = pytest.mark.integration
+
 
 def test_scan_headers_vulnweb(client):
     """Scan deliberately vulnerable site — should find missing security headers + info leaks."""

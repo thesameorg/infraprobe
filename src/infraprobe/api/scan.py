@@ -150,23 +150,32 @@ def _format_target_result(result: TargetResult, fmt: OutputFormat) -> TargetResu
 # ---------------------------------------------------------------------------
 
 
-async def _run_full_scan(request: ScanRequest) -> ScanResponse:
-    contexts = [validate_target(raw) for raw in request.targets]
+async def _run_scan_with_validator(
+    targets: list[str],
+    checks: list[CheckType],
+    validator: Callable[[str], ScanContext],
+) -> ScanResponse:
+    """Shared orchestration for all scan endpoints (generic, domain, IP)."""
+    contexts = [validator(raw) for raw in targets]
     logger.info(
         "scan started",
         extra={
-            "targets": request.targets,
-            "checks": [str(c) for c in request.checks],
+            "targets": targets,
+            "checks": [str(c) for c in checks],
             "resolved_ips": {str(ctx): list(ctx.resolved_ips) for ctx in contexts},
         },
     )
     start = time.monotonic()
-    target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
+    target_results = await asyncio.gather(*[_scan_target(ctx, checks) for ctx in contexts])
     for tr in target_results:
         logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
     duration_ms = int((time.monotonic() - start) * 1000)
-    logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
+    logger.info("scan done", extra={"targets_count": len(targets), "duration_ms": duration_ms})
     return ScanResponse(results=list(target_results))
+
+
+async def _run_full_scan(request: ScanRequest) -> ScanResponse:
+    return await _run_scan_with_validator(request.targets, request.checks, validate_target)
 
 
 @router.post("/scan")
@@ -178,12 +187,17 @@ async def scan(
     return _format_scan_response(result, fmt)
 
 
-async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
-    ctx = validate_target(request.target)
+async def _run_single_check(
+    check_type: CheckType,
+    target: str,
+    validator: Callable[[str], ScanContext],
+) -> TargetResult:
+    """Shared orchestration for all single-check endpoints (generic, domain, IP)."""
+    ctx = validator(target)
     logger.info(
         "check started",
         extra={
-            "target": request.target,
+            "target": target,
             "check": str(check_type),
             "resolved_ips": list(ctx.resolved_ips),
         },
@@ -193,9 +207,13 @@ async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> T
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info(
         "check request done",
-        extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
+        extra={"target": target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
     )
     return result
+
+
+async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
+    return await _run_single_check(check_type, request.target, validate_target)
 
 
 def _make_check_handler(ct: CheckType):
@@ -231,22 +249,8 @@ async def scan_domain(
     request: DomainScanRequest,
     fmt: FormatParam = OutputFormat.JSON,
 ) -> ScanResponse:
-    contexts = [validate_domain(raw) for raw in request.targets]
-    logger.info(
-        "scan started",
-        extra={
-            "targets": request.targets,
-            "checks": [str(c) for c in request.checks],
-            "resolved_ips": {str(ctx): list(ctx.resolved_ips) for ctx in contexts},
-        },
-    )
-    start = time.monotonic()
-    target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
-    for tr in target_results:
-        logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
-    duration_ms = int((time.monotonic() - start) * 1000)
-    logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
-    return _format_scan_response(ScanResponse(results=list(target_results)), fmt)
+    result = await _run_scan_with_validator(request.targets, request.checks, validate_domain)
+    return _format_scan_response(result, fmt)
 
 
 @router.post("/check_domain/{check_type}")
@@ -255,18 +259,7 @@ async def check_domain(
     request: SingleCheckRequest,
     fmt: FormatParam = OutputFormat.JSON,
 ) -> TargetResult:
-    ctx = validate_domain(request.target)
-    logger.info(
-        "check started",
-        extra={"target": request.target, "check": str(check_type), "resolved_ips": list(ctx.resolved_ips)},
-    )
-    start = time.monotonic()
-    result = await _scan_target(ctx, [check_type])
-    duration_ms = int((time.monotonic() - start) * 1000)
-    logger.info(
-        "check request done",
-        extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
-    )
+    result = await _run_single_check(check_type, request.target, validate_domain)
     return _format_target_result(result, fmt)
 
 
@@ -283,22 +276,8 @@ async def scan_ip(
     invalid = set(request.checks) & DNS_ONLY_CHECKS
     if invalid:
         raise InvalidTargetError(f"DNS checks not applicable to IP targets: {', '.join(sorted(invalid))}")
-    contexts = [validate_ip(raw) for raw in request.targets]
-    logger.info(
-        "scan started",
-        extra={
-            "targets": request.targets,
-            "checks": [str(c) for c in request.checks],
-            "resolved_ips": {str(ctx): list(ctx.resolved_ips) for ctx in contexts},
-        },
-    )
-    start = time.monotonic()
-    target_results = await asyncio.gather(*[_scan_target(ctx, request.checks) for ctx in contexts])
-    for tr in target_results:
-        logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
-    duration_ms = int((time.monotonic() - start) * 1000)
-    logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
-    return _format_scan_response(ScanResponse(results=list(target_results)), fmt)
+    result = await _run_scan_with_validator(request.targets, request.checks, validate_ip)
+    return _format_scan_response(result, fmt)
 
 
 @router.post("/check_ip/{check_type}")
@@ -309,18 +288,7 @@ async def check_ip(
 ) -> TargetResult:
     if check_type in DNS_ONLY_CHECKS:
         raise InvalidTargetError(f"Check type {check_type} not applicable to IP targets")
-    ctx = validate_ip(request.target)
-    logger.info(
-        "check started",
-        extra={"target": request.target, "check": str(check_type), "resolved_ips": list(ctx.resolved_ips)},
-    )
-    start = time.monotonic()
-    result = await _scan_target(ctx, [check_type])
-    duration_ms = int((time.monotonic() - start) * 1000)
-    logger.info(
-        "check request done",
-        extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
-    )
+    result = await _run_single_check(check_type, request.target, validate_ip)
     return _format_target_result(result, fmt)
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ import httpx
 
 from infraprobe.http import fetch_with_fallback, scanner_client
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
+
+logger = logging.getLogger("infraprobe.scanners.web")
 
 # ---------------------------------------------------------------------------
 # Sensitive path probes
@@ -271,7 +274,9 @@ async def _check_paths(base_url: str, client: httpx.AsyncClient, findings: list[
 
     exposed: list[str] = []
     for result in results:
-        if isinstance(result, Finding):
+        if isinstance(result, Exception):
+            logger.error("path probe failed", extra={"error": str(result)}, exc_info=result)
+        elif isinstance(result, Finding):
             findings.append(result)
             exposed.append(result.details.get("path", ""))
 
@@ -421,13 +426,16 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
             _check_mixed_content(main_resp, findings, raw)
 
             # Parallel async checks
-            await asyncio.gather(
+            check_results = await asyncio.gather(
                 _check_cors(base_url, client, findings, raw),
                 _check_paths(base_url, client, findings, raw),
                 _check_robots(base_url, client, findings, raw),
                 _check_security_txt(base_url, client, findings, raw),
                 return_exceptions=True,
             )
+            for result in check_results:
+                if isinstance(result, Exception):
+                    logger.error("web sub-check failed", extra={"error": str(result)}, exc_info=result)
     except httpx.HTTPError as exc:
         return CheckResult(check=CheckType.WEB, error=f"Cannot connect to {target}: {exc}")
 

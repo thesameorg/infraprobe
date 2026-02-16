@@ -1,3 +1,4 @@
+import hmac
 import logging
 import time
 import uuid
@@ -113,8 +114,8 @@ if settings.rapidapi_proxy_secret:
         async def dispatch(self, request: Request, call_next):  # type: ignore[override]
             if request.url.path == "/health":
                 return await call_next(request)
-            secret = request.headers.get("x-rapidapi-proxy-secret")
-            if secret != settings.rapidapi_proxy_secret:
+            secret = request.headers.get("x-rapidapi-proxy-secret") or ""
+            if not hmac.compare_digest(secret, settings.rapidapi_proxy_secret):
                 logger.warning("rapidapi auth rejected", extra={"path": request.url.path})
                 return JSONResponse(status_code=403, content={"detail": "Forbidden"})
             return await call_next(request)

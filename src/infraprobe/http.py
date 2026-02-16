@@ -28,7 +28,16 @@ async def fetch_with_fallback(target: str, client: httpx.AsyncClient) -> tuple[s
 
     Returns ``(base_url, response)`` where *base_url* is the scheme + host
     that succeeded (no trailing slash).
+
+    Re-validates the target against the blocklist before connecting to
+    mitigate DNS rebinding attacks (shrinks the TOCTOU window between
+    initial validation and the actual connection).
     """
+    from infraprobe.blocklist import validate_target
+
+    # Re-resolve and validate IPs right before connecting (DNS rebinding defense)
+    validate_target(target)
+
     host = parse_target(target).host
 
     # Already has a scheme — use as-is.

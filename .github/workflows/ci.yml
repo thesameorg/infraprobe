@@ -54,3 +54,4 @@ jobs:
           service: infraprobe
           image: ${{ env.IMAGE }}:${{ github.sha }}
           region: ${{ vars.GCP_REGION }}
+          flags: --concurrency=10 --memory=1Gi --cpu=2

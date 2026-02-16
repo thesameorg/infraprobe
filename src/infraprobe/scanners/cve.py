@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 import nmap
 
+from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, validate_target
 from infraprobe.config import settings
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
 from infraprobe.target import parse_target
@@ -166,6 +167,13 @@ async def scan(target: str, timeout: float = 30.0) -> CheckResult:
         host = parse_target(target).host
         api_key = settings.nvd_api_key
 
+        # Re-validate and use pre-resolved IP for nmap to prevent DNS rebinding
+        try:
+            ctx = validate_target(target)
+            nmap_host = ctx.resolved_ips[0] if ctx.resolved_ips else host
+        except (BlockedTargetError, InvalidTargetError) as exc:
+            return CheckResult(check=CheckType.CVE, error=f"Target validation failed: {exc}")
+
         # ---- Budget split: 70 % nmap, 25 % NVD, 5 % margin ----
         nmap_budget = timeout * 0.7
         nvd_budget = timeout * 0.25
@@ -173,7 +181,7 @@ async def scan(target: str, timeout: float = 30.0) -> CheckResult:
         nmap_host_timeout = max(3, int(nmap_budget - 1))
         nmap_args = f"-sT -sV -T4 -Pn --top-ports 20 --host-timeout {nmap_host_timeout}s"
 
-        services = await asyncio.to_thread(_run_nmap_version, host, nmap_args)
+        services = await asyncio.to_thread(_run_nmap_version, nmap_host, nmap_args)
 
         if not services:
             return CheckResult(
