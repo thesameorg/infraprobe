@@ -799,3 +799,46 @@ def test_check_cve_blocked_target(client):
     resp = client.post("/v1/check/cve", json={"target": "127.0.0.1"})
     assert resp.status_code == 400
     assert "blocked" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# WHOIS scanner
+# ---------------------------------------------------------------------------
+
+
+def test_scan_whois_google(client):
+    """WHOIS lookup for google.com — should return registrar, dates, and no errors."""
+    resp = client.post("/v1/check/whois", json={"target": "google.com"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    whois_result = data["results"]["whois"]
+    assert whois_result["error"] is None
+
+    raw = whois_result["raw"]
+    assert raw["domain"] == "google.com"
+    assert raw.get("registrar"), "google.com should have a registrar"
+    assert raw.get("created"), "google.com should have a creation date"
+    assert raw.get("expires"), "google.com should have an expiration date"
+
+    titles = [f["title"] for f in whois_result["findings"]]
+    assert "Registrar identified" in titles
+    assert "Domain age" in titles
+    assert "Domain expiration" in titles
+    # google.com is not new and not expiring soon
+    assert "Very new domain" not in titles
+    assert "Domain expires soon" not in titles
+
+
+def test_scan_whois_in_default_domain_checks(client):
+    """WHOIS should be included in the default domain scan bundle."""
+    resp = client.post("/v1/scan", json={"targets": ["google.com"]})
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert "whois" in result["results"], f"whois missing from default scan, got: {list(result['results'].keys())}"
+
+
+def test_scan_whois_rejected_for_ip(client):
+    """WHOIS is domain-only — IP-specific endpoint should reject it."""
+    resp = client.post("/v1/check_ip/whois", json={"target": "8.8.8.8"})
+    assert resp.status_code == 422

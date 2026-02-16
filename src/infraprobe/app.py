@@ -16,7 +16,7 @@ from infraprobe.blocklist import BlockedTargetError, InvalidTargetError
 from infraprobe.config import settings
 from infraprobe.logging import request_ctx, setup_logging
 from infraprobe.models import CheckType
-from infraprobe.scanners import blacklist, cve, ports, tech, web
+from infraprobe.scanners import blacklist, cve, ports, tech, web, whois_scanner
 from infraprobe.scanners import dns as dns_scanner
 from infraprobe.scanners import headers_drheader as headers
 from infraprobe.scanners import ssl as ssl_scanner
@@ -142,6 +142,7 @@ register_scanner(CheckType.DNS, dns_scanner.scan)
 register_scanner(CheckType.TECH, tech.scan)
 register_scanner(CheckType.BLACKLIST, blacklist.scan)
 register_scanner(CheckType.WEB, web.scan)
+register_scanner(CheckType.WHOIS, whois_scanner.scan)
 
 # Deep scanners (slower, more thorough)
 register_scanner(CheckType.SSL_DEEP, ssl_deep_scanner.scan)

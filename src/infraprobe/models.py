@@ -33,6 +33,7 @@ class CheckType(StrEnum):
     PORTS = "ports"
     PORTS_DEEP = "ports_deep"
     CVE = "cve"
+    WHOIS = "whois"
 
 
 # Default checks for domain targets (light only — deep checks are opt-in)
@@ -42,6 +43,7 @@ DOMAIN_CHECKS: list[CheckType] = [
     CheckType.DNS,
     CheckType.TECH,
     CheckType.BLACKLIST,
+    CheckType.WHOIS,
 ]
 
 # Default checks for IP targets (no DNS — meaningless for raw IPs)
@@ -53,7 +55,7 @@ IP_CHECKS: list[CheckType] = [
 ]
 
 # Checks that require a domain name (not applicable to IP targets)
-DNS_ONLY_CHECKS: frozenset[CheckType] = frozenset({CheckType.DNS, CheckType.DNS_DEEP})
+DNS_ONLY_CHECKS: frozenset[CheckType] = frozenset({CheckType.DNS, CheckType.DNS_DEEP, CheckType.WHOIS})
 
 # Backward-compatible alias
 LIGHT_CHECKS = DOMAIN_CHECKS

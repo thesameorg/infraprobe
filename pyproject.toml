@@ -16,6 +16,7 @@ dependencies = [
     "wappalyzer>=1.0.20",
     "drheaderplus>=3.0.0",
     "python-nmap>=0.7.1",
+    "asyncwhois>=1.1.12",
 ]
 
 [build-system]
