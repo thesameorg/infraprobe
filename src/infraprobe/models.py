@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class OutputFormat(StrEnum):
     JSON = "json"
     SARIF = "sarif"
+    CSV = "csv"
 
 
 class Severity(StrEnum):

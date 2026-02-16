@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, Response
 
 from infraprobe.blocklist import InvalidTargetError, validate_domain, validate_ip, validate_target
 from infraprobe.config import settings
+from infraprobe.formatters.csv import scan_response_to_csv, target_result_to_csv
 from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
 from infraprobe.models import (
     DNS_ONLY_CHECKS,
@@ -131,17 +132,22 @@ async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResul
 
 
 _SARIF_MEDIA_TYPE = "application/sarif+json"
+_CSV_MEDIA_TYPE = "text/csv"
 
 
 def _format_scan_response(result: ScanResponse, fmt: OutputFormat) -> ScanResponse | Response:
     if fmt == OutputFormat.SARIF:
         return Response(content=json.dumps(scan_response_to_sarif(result)), media_type=_SARIF_MEDIA_TYPE)
+    if fmt == OutputFormat.CSV:
+        return Response(content=scan_response_to_csv(result), media_type=_CSV_MEDIA_TYPE)
     return result
 
 
 def _format_target_result(result: TargetResult, fmt: OutputFormat) -> TargetResult | Response:
     if fmt == OutputFormat.SARIF:
         return Response(content=json.dumps(target_result_to_sarif(result)), media_type=_SARIF_MEDIA_TYPE)
+    if fmt == OutputFormat.CSV:
+        return Response(content=target_result_to_csv(result), media_type=_CSV_MEDIA_TYPE)
     return result
 
 

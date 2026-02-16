@@ -1,9 +1,12 @@
-"""Tests for output format support (JSON default + SARIF)."""
+"""Tests for output format support (JSON default + SARIF + CSV)."""
 
+import csv
+import io
 import json
 
 import pytest
 
+from infraprobe.formatters.csv import scan_response_to_csv, target_result_to_csv
 from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
 from infraprobe.models import (
     CheckResult,
@@ -228,6 +231,134 @@ class TestFormatQueryParam:
     def test_error_responses_stay_json(self, client):
         """Error responses (blocked target) should always be JSON, not SARIF."""
         resp = client.post("/v1/scan?format=sarif", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
+        assert resp.status_code == 400
+        assert resp.headers["content-type"].startswith("application/json")
+        assert "detail" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — CSV converter (no network)
+# ---------------------------------------------------------------------------
+
+
+def _parse_csv(text: str) -> list[list[str]]:
+    return list(csv.reader(io.StringIO(text)))
+
+
+class TestCsvStructure:
+    """Verify CSV output structure."""
+
+    def test_header_row(self):
+        tr = _target_result("example.com", {"headers": _check_result(CheckType.HEADERS)})
+        rows = _parse_csv(target_result_to_csv(tr))
+        assert rows[0] == ["target", "check", "severity", "title", "description", "details", "score"]
+
+    def test_finding_produces_row(self):
+        finding = _finding(Severity.HIGH, "Missing HSTS", "No HSTS header found")
+        tr = _target_result("example.com", {"headers": _check_result(CheckType.HEADERS, [finding])})
+        rows = _parse_csv(target_result_to_csv(tr))
+        assert len(rows) == 2  # header + 1 finding
+        row = rows[1]
+        assert row[0] == "example.com"
+        assert row[1] == "headers"
+        assert row[2] == "high"
+        assert row[3] == "Missing HSTS"
+        assert row[4] == "No HSTS header found"
+        assert row[6] == "B"
+
+    def test_multiple_findings(self):
+        findings = [
+            _finding(Severity.HIGH, "Missing HSTS"),
+            _finding(Severity.MEDIUM, "No CSP"),
+        ]
+        tr = _target_result("a.com", {"headers": _check_result(CheckType.HEADERS, findings)})
+        rows = _parse_csv(target_result_to_csv(tr))
+        assert len(rows) == 3  # header + 2 findings
+
+    def test_error_check_produces_error_row(self):
+        tr = _target_result("a.com", {"ssl": _check_result(CheckType.SSL, error="Connection refused")})
+        rows = _parse_csv(target_result_to_csv(tr))
+        assert len(rows) == 2
+        row = rows[1]
+        assert row[2] == "error"
+        assert row[3] == "Scanner error"
+        assert row[4] == "Connection refused"
+
+    def test_clean_check_omitted(self):
+        """Checks with no findings and no error produce no rows."""
+        tr = _target_result("a.com", {"headers": _check_result(CheckType.HEADERS)})
+        rows = _parse_csv(target_result_to_csv(tr))
+        assert len(rows) == 1  # header only
+
+    def test_multi_target_csv(self):
+        finding = _finding(Severity.LOW, "Old TLS")
+        tr1 = _target_result("a.com", {"ssl": _check_result(CheckType.SSL, [finding])})
+        tr2 = _target_result("b.com", {"ssl": _check_result(CheckType.SSL, [finding])})
+        resp = ScanResponse(results=[tr1, tr2])
+        rows = _parse_csv(scan_response_to_csv(resp))
+        assert len(rows) == 3  # header + 2 findings
+        assert rows[1][0] == "a.com"
+        assert rows[2][0] == "b.com"
+
+    def test_details_json_encoded(self):
+        finding = Finding(severity=Severity.INFO, title="Tech", description="d", details={"name": "nginx"})
+        tr = _target_result("x.com", {"tech": _check_result(CheckType.TECH, [finding])})
+        rows = _parse_csv(target_result_to_csv(tr))
+        parsed = json.loads(rows[1][5])
+        assert parsed == {"name": "nginx"}
+
+    def test_empty_details_is_blank(self):
+        finding = _finding(Severity.INFO, "Test")
+        tr = _target_result("x.com", {"headers": _check_result(CheckType.HEADERS, [finding])})
+        rows = _parse_csv(target_result_to_csv(tr))
+        assert rows[1][5] == ""
+
+    def test_column_count_consistent(self):
+        findings = [_finding(Severity.HIGH, "A"), _finding(Severity.LOW, "B")]
+        tr = _target_result(
+            "x.com",
+            {
+                "headers": _check_result(CheckType.HEADERS, findings),
+                "ssl": _check_result(CheckType.SSL, error="timeout"),
+            },
+        )
+        rows = _parse_csv(target_result_to_csv(tr))
+        for row in rows:
+            assert len(row) == 7
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — CSV format query parameter on real endpoints
+# ---------------------------------------------------------------------------
+
+
+class TestCsvFormatQueryParam:
+    """Test ?format=csv query parameter on live endpoints."""
+
+    def test_csv_format_on_scan(self, client):
+        resp = client.post("/v1/scan?format=csv", json={"targets": ["example.com"], "checks": ["headers"]})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        rows = _parse_csv(resp.text)
+        assert rows[0] == ["target", "check", "severity", "title", "description", "details", "score"]
+        assert len(rows) > 1  # at least one finding
+
+    def test_csv_format_on_check_headers(self, client):
+        resp = client.post("/v1/check/headers?format=csv", json={"target": "example.com"})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        rows = _parse_csv(resp.text)
+        assert rows[0][0] == "target"
+        assert len(rows) > 1
+
+    def test_csv_format_on_check_domain(self, client):
+        resp = client.post("/v1/check_domain/headers?format=csv", json={"target": "example.com"})
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+
+    def test_csv_error_responses_stay_json(self, client):
+        """Error responses (blocked target) should always be JSON, not CSV."""
+        resp = client.post("/v1/scan?format=csv", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("application/json")
         assert "detail" in resp.json()
