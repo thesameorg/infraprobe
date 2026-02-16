@@ -2,11 +2,12 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import Callable, Coroutine
 from typing import Annotated
 
-from fastapi import APIRouter, Query
-from fastapi.responses import Response
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import JSONResponse, Response
 
 from infraprobe.blocklist import InvalidTargetError, validate_domain, validate_ip, validate_target
 from infraprobe.config import settings
@@ -17,6 +18,9 @@ from infraprobe.models import (
     CheckType,
     DomainScanRequest,
     IpScanRequest,
+    Job,
+    JobCreate,
+    JobStatus,
     OutputFormat,
     ScanRequest,
     ScanResponse,
@@ -24,6 +28,7 @@ from infraprobe.models import (
     TargetResult,
 )
 from infraprobe.scoring import calculate_score
+from infraprobe.storage.base import JobStore
 from infraprobe.target import ScanContext
 
 router = APIRouter()
@@ -145,11 +150,7 @@ def _format_target_result(result: TargetResult, fmt: OutputFormat) -> TargetResu
 # ---------------------------------------------------------------------------
 
 
-@router.post("/scan")
-async def scan(
-    request: ScanRequest,
-    fmt: FormatParam = OutputFormat.JSON,
-) -> ScanResponse:
+async def _run_full_scan(request: ScanRequest) -> ScanResponse:
     contexts = [validate_target(raw) for raw in request.targets]
     logger.info(
         "scan started",
@@ -165,7 +166,16 @@ async def scan(
         logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info("scan done", extra={"targets_count": len(request.targets), "duration_ms": duration_ms})
-    return _format_scan_response(ScanResponse(results=list(target_results)), fmt)
+    return ScanResponse(results=list(target_results))
+
+
+@router.post("/scan")
+async def scan(
+    request: ScanRequest,
+    fmt: FormatParam = OutputFormat.JSON,
+) -> ScanResponse:
+    result = await _run_full_scan(request)
+    return _format_scan_response(result, fmt)
 
 
 async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
@@ -312,3 +322,47 @@ async def check_ip(
         extra={"target": request.target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
     )
     return _format_target_result(result, fmt)
+
+
+# ---------------------------------------------------------------------------
+# Async / polling endpoints
+# ---------------------------------------------------------------------------
+
+# Prevent GC of fire-and-forget tasks
+_background_tasks: set[asyncio.Task] = set()
+
+
+async def _run_scan_job(store: JobStore, job_id: str, request: ScanRequest) -> None:
+    try:
+        await store.update_status(job_id, JobStatus.RUNNING)
+        result = await _run_full_scan(request)
+        await store.complete(job_id, result)
+    except Exception as exc:
+        logger.error("async scan job failed", extra={"job_id": job_id, "error": str(exc)})
+        await store.fail(job_id, str(exc))
+
+
+@router.post("/scan/async", status_code=202, response_model=JobCreate)
+async def scan_async(request: ScanRequest, req: Request) -> JobCreate:
+    # Validate targets eagerly so 400/422 errors are returned synchronously
+    for raw in request.targets:
+        validate_target(raw)
+
+    store: JobStore = req.app.state.job_store
+    job_id = uuid.uuid4().hex
+    job = await store.create(job_id, request)
+
+    task = asyncio.create_task(_run_scan_job(store, job_id, request))
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+
+    return JobCreate(job_id=job.job_id, status=job.status, created_at=job.created_at)
+
+
+@router.get("/scan/{job_id}", response_model=Job)
+async def get_scan_job(job_id: str, req: Request) -> Job | JSONResponse:
+    store: JobStore = req.app.state.job_store
+    job = await store.get(job_id)
+    if job is None:
+        return JSONResponse(status_code=404, content={"detail": "Job not found"})
+    return job

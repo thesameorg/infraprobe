@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -105,3 +106,31 @@ class TargetResult(BaseModel):
 
 class ScanResponse(BaseModel):
     results: list[TargetResult]
+
+
+# ---------------------------------------------------------------------------
+# Async job models
+# ---------------------------------------------------------------------------
+
+
+class JobStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class JobCreate(BaseModel):
+    job_id: str
+    status: JobStatus
+    created_at: datetime
+
+
+class Job(BaseModel):
+    job_id: str
+    status: JobStatus
+    created_at: datetime
+    updated_at: datetime
+    request: ScanRequest
+    result: ScanResponse | None = None
+    error: str | None = None

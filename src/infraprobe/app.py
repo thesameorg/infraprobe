@@ -1,6 +1,8 @@
 import logging
 import time
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -20,12 +22,26 @@ from infraprobe.scanners import ssl as ssl_scanner
 from infraprobe.scanners.deep import dns as dns_deep
 from infraprobe.scanners.deep import ssl as ssl_deep_scanner
 from infraprobe.scanners.deep import tech as tech_deep
+from infraprobe.storage import MemoryJobStore
 
 setup_logging()
 
 logger = logging.getLogger("infraprobe.app")
 
-app = FastAPI(title="InfraProbe", version=__version__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    store = MemoryJobStore(
+        ttl_seconds=settings.job_ttl_seconds,
+        cleanup_interval=settings.job_cleanup_interval,
+    )
+    app.state.job_store = store
+    store.start_cleanup_loop()
+    yield
+    store.stop_cleanup_loop()
+
+
+app = FastAPI(title="InfraProbe", version=__version__, lifespan=lifespan)
 
 
 # ---------------------------------------------------------------------------

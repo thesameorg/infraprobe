@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     scanner_timeout: float = 10.0
     deep_scanner_timeout: float = 30.0
     rapidapi_proxy_secret: str | None = None
+    job_ttl_seconds: int = 3600
+    job_cleanup_interval: int = 300
 
     model_config = {"env_prefix": "INFRAPROBE_", "env_file": ".env", "extra": "ignore"}
 
