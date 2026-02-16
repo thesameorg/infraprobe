@@ -41,8 +41,6 @@ import os
 import random
 import time
 
-from locust import HttpUser, between, events, task
-
 from targets import (
     IP_LIGHT_CHECKS,
     LIGHT_CHECKS,
@@ -55,6 +53,8 @@ from targets import (
     random_targets,
     weighted_domain,
 )
+
+from locust import HttpUser, between, events, task
 
 logger = logging.getLogger(__name__)
 
