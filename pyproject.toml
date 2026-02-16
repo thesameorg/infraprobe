@@ -15,6 +15,7 @@ dependencies = [
     "checkdmarc==4.8.5",
     "wappalyzer>=1.0.20",
     "drheaderplus>=3.0.0",
+    "python-nmap>=0.7.1",
 ]
 
 [build-system]

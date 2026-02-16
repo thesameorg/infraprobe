@@ -95,7 +95,7 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
         return CheckResult(check=check_type, error=f"Scanner {check_type} failed: {exc}")
 
 
-_DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep", "blacklist_deep"})
+_DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep", "blacklist_deep", "ports_deep", "cve"})
 
 
 async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResult:
@@ -214,7 +214,7 @@ def _make_check_handler(ct: CheckType):
 # Deep checks live under /check_deep/{name} (e.g. /check_deep/ssl), light checks under /check/{name}.
 for _ct in CheckType:
     _handler = _make_check_handler(_ct)
-    if _ct in _DEEP_CHECKS:
+    if _ct.value.endswith("_deep"):
         _slug = _ct.value.removesuffix("_deep")
         router.add_api_route(f"/check_deep/{_slug}", _handler, methods=["POST"], response_model=TargetResult)
     else:

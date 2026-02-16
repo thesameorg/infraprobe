@@ -15,7 +15,7 @@ from infraprobe.blocklist import BlockedTargetError, InvalidTargetError
 from infraprobe.config import settings
 from infraprobe.logging import request_ctx, setup_logging
 from infraprobe.models import CheckType
-from infraprobe.scanners import blacklist, tech, web
+from infraprobe.scanners import blacklist, cve, ports, tech, web
 from infraprobe.scanners import dns as dns_scanner
 from infraprobe.scanners import headers_drheader as headers
 from infraprobe.scanners import ssl as ssl_scanner
@@ -147,6 +147,9 @@ register_scanner(CheckType.SSL_DEEP, ssl_deep_scanner.scan)
 register_scanner(CheckType.DNS_DEEP, dns_deep.scan)
 register_scanner(CheckType.TECH_DEEP, tech_deep.scan)
 register_scanner(CheckType.BLACKLIST_DEEP, blacklist.scan_deep)
+register_scanner(CheckType.PORTS, ports.scan)
+register_scanner(CheckType.PORTS_DEEP, ports.scan_deep)
+register_scanner(CheckType.CVE, cve.scan)
 
 # Register routes with /v1 prefix
 app.include_router(scan_router, prefix="/v1")

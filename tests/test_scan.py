@@ -621,3 +621,179 @@ def test_check_ip_rejects_domain(client):
     """POST /v1/check_ip/headers with a domain — should return 422."""
     resp = client.post("/v1/check_ip/headers", json={"target": "testphp.vulnweb.com"})
     assert resp.status_code == 422
+
+
+# --- Port scanner tests ---
+
+
+def test_check_ports_scanme(client):
+    """Light port scan of scanme.nmap.org — should find open ports with correct raw structure."""
+    resp = client.post("/v1/check/ports", json={"target": "scanme.nmap.org"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["target"] == "scanme.nmap.org"
+    ports_result = data["results"]["ports"]
+    assert ports_result["error"] is None
+
+    raw = ports_result["raw"]
+    assert "host" in raw
+    assert "open_ports" in raw
+    assert "open_count" in raw
+    assert "command_line" in raw
+    assert isinstance(raw["open_ports"], list)
+    assert raw["open_count"] == len(raw["open_ports"])
+    # scanme.nmap.org should have at least port 22 or 80 open
+    assert raw["open_count"] > 0, f"Expected open ports on scanme.nmap.org, got: {raw}"
+
+    # Verify port entry structure
+    port_entry = raw["open_ports"][0]
+    assert "port" in port_entry
+    assert "protocol" in port_entry
+    assert "state" in port_entry
+    assert "service" in port_entry
+    assert port_entry["state"] == "open"
+
+
+def test_check_ports_deep_scanme(client):
+    """Deep port scan of scanme.nmap.org — should include version info."""
+    resp = client.post("/v1/check_deep/ports", json={"target": "scanme.nmap.org"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    ports_result = data["results"]["ports_deep"]
+    assert ports_result["error"] is None
+
+    raw = ports_result["raw"]
+    assert "open_ports" in raw
+    assert "command_line" in raw
+    assert "-sV" in raw["command_line"]
+    # Deep scan of 1000 ports may hit host-timeout; if ports found, verify structure
+    if raw["open_count"] > 0:
+        port_entry = raw["open_ports"][0]
+        assert "product" in port_entry
+
+
+def test_ports_not_in_default_checks(client):
+    """Ports check should NOT be in default checks (it's opt-in like web)."""
+    resp = client.post("/v1/scan", json={"targets": ["example.com"]})
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert "ports" not in result["results"]
+    assert "ports_deep" not in result["results"]
+
+
+def test_ports_in_bundle_scan(client):
+    """Ports check can be explicitly included in a bundle scan."""
+    resp = client.post("/v1/scan", json={"targets": ["scanme.nmap.org"], "checks": ["ports"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    assert "ports" in result["results"]
+    assert result["results"]["ports"]["error"] is None
+
+
+def test_ports_risk_classification(client):
+    """Severity values should be valid, and well-known services classified correctly."""
+    resp = client.post("/v1/check/ports", json={"target": "scanme.nmap.org"})
+    assert resp.status_code == 200
+
+    ports_result = resp.json()["results"]["ports"]
+    assert ports_result["error"] is None
+
+    valid_severities = {"critical", "high", "medium", "low", "info"}
+    for finding in ports_result["findings"]:
+        assert finding["severity"] in valid_severities, f"Invalid severity: {finding['severity']}"
+
+    # SSH (port 22) should be classified as info if present
+    ssh_findings = [f for f in ports_result["findings"] if f.get("details", {}).get("port") == 22]
+    if ssh_findings:
+        assert ssh_findings[0]["severity"] == "info"
+
+
+def test_check_ports_blocked_target(client):
+    """Port scan of blocked target (127.0.0.1) — SSRF protection should return 400."""
+    resp = client.post("/v1/check/ports", json={"target": "127.0.0.1"})
+    assert resp.status_code == 400
+    assert "blocked" in resp.json()["detail"].lower()
+
+
+# --- CVE scanner tests ---
+
+
+def test_check_cve_scanme(client):
+    """CVE scan of scanme.nmap.org — should detect services and query NVD for CVEs."""
+    resp = client.post("/v1/check/cve", json={"target": "scanme.nmap.org"})
+    assert resp.status_code == 200
+
+    data = resp.json()
+    assert data["target"] == "scanme.nmap.org"
+    cve_result = data["results"]["cve"]
+    assert cve_result["error"] is None
+
+    raw = cve_result["raw"]
+    assert "host" in raw
+    assert "services_scanned" in raw
+    assert "cves_found" in raw
+    assert isinstance(raw.get("services", []), list)
+    assert isinstance(raw.get("cves", []), list)
+
+    # scanme.nmap.org runs old Apache — expect version-detected services and CVEs
+    if raw["services_scanned"] > 0:
+        svc = raw["services"][0]
+        assert "port" in svc
+        assert "product" in svc
+        assert "version" in svc
+        assert "cpe" in svc
+
+    if raw["cves_found"] > 0:
+        cve_entry = raw["cves"][0]
+        assert "cve_id" in cve_entry
+        assert cve_entry["cve_id"].startswith("CVE-")
+        assert "cvss_score" in cve_entry
+        assert "severity" in cve_entry
+        assert "product" in cve_entry
+
+
+def test_check_cve_findings_structure(client):
+    """CVE findings should have valid severities and CVE details."""
+    resp = client.post("/v1/check/cve", json={"target": "scanme.nmap.org"})
+    assert resp.status_code == 200
+
+    cve_result = resp.json()["results"]["cve"]
+    assert cve_result["error"] is None
+    assert len(cve_result["findings"]) > 0
+
+    valid_severities = {"critical", "high", "medium", "low", "info"}
+    for finding in cve_result["findings"]:
+        assert finding["severity"] in valid_severities
+        # CVE findings should have details with cve_id (unless it's the "no CVEs" info finding)
+        if finding["severity"] != "info":
+            assert "cve_id" in finding["details"]
+            assert finding["details"]["cve_id"].startswith("CVE-")
+            assert isinstance(finding["details"]["cvss_score"], (int, float))
+
+
+def test_cve_in_bundle_scan(client):
+    """CVE check can be explicitly included in a bundle scan."""
+    resp = client.post("/v1/scan", json={"targets": ["scanme.nmap.org"], "checks": ["cve"]})
+    assert resp.status_code == 200
+
+    result = resp.json()["results"][0]
+    assert "cve" in result["results"]
+    assert result["results"]["cve"]["error"] is None
+
+
+def test_cve_not_in_default_checks(client):
+    """CVE check should NOT be in default checks (it's opt-in like ports)."""
+    resp = client.post("/v1/scan", json={"targets": ["example.com"]})
+    assert resp.status_code == 200
+    result = resp.json()["results"][0]
+    assert "cve" not in result["results"]
+
+
+def test_check_cve_blocked_target(client):
+    """CVE scan of blocked target (127.0.0.1) — SSRF protection should return 400."""
+    resp = client.post("/v1/check/cve", json={"target": "127.0.0.1"})
+    assert resp.status_code == 400
+    assert "blocked" in resp.json()["detail"].lower()

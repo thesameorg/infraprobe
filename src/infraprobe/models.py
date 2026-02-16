@@ -29,6 +29,9 @@ class CheckType(StrEnum):
     BLACKLIST = "blacklist"
     BLACKLIST_DEEP = "blacklist_deep"
     WEB = "web"
+    PORTS = "ports"
+    PORTS_DEEP = "ports_deep"
+    CVE = "cve"
 
 
 # Default checks for domain targets (light only — deep checks are opt-in)

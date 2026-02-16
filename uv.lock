@@ -346,6 +346,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic-settings" },
+    { name = "python-nmap" },
     { name = "sslyze" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "wappalyzer" },
@@ -370,6 +371,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
+    { name = "python-nmap", specifier = ">=0.7.1" },
     { name = "sslyze", specifier = ">=6.3.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
     { name = "wappalyzer", specifier = ">=1.0.20" },
@@ -622,6 +624,12 @@ sdist = { url = "https://files.pythonhosted.org/packages/f0/26/19cadc79a718c5edb
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/1b/a298b06749107c305e1fe0f814c6c74aea7b2f1e10989cb30f544a1b3253/python_dotenv-1.2.1-py3-none-any.whl", hash = "sha256:b81ee9561e9ca4004139c6cbba3a238c32b03e4894671e181b671e8cb8425d61", size = 21230, upload-time = "2025-10-26T15:12:09.109Z" },
 ]
+
+[[package]]
+name = "python-nmap"
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f7/1b/8e6b3d1461331e4e8600faf099e7c62ba3c1603987dafdd558681fb8ba37/python-nmap-0.7.1.tar.gz", hash = "sha256:f75af6b91dd8e3b0c31f869db32163f62ada686945e5b7c25f84bc0f7fad3b64", size = 44366, upload-time = "2021-10-26T18:40:26.488Z" }
 
 [[package]]
 name = "pyyaml"

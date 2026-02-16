@@ -19,6 +19,9 @@ Two endpoint styles, all under `/v1`:
 | `tech` | Technology fingerprinting |
 | `tech_deep` | Deep tech detection via Wappalyzer |
 | `blacklist` | DNSBL blacklist checking |
+| `web` | CORS, exposed paths, mixed content, security.txt |
+| `ports` / `ports_deep` | Port scanning (nmap top-20 / top-1000 + version detection) |
+| `cve` | CVE lookup — nmap version detection → NVD API (requires `INFRAPROBE_NVD_API_KEY`) |
 
 Results are scored (A+ through F) based on finding severity.
 
