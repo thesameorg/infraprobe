@@ -60,11 +60,23 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
         return CheckResult(check=check_type, error=f"Scanner {check_type} not registered")
 
     start = time.monotonic()
+    logger.info(
+        "%s started on %s (timeout=%.1fs)",
+        check_type,
+        target,
+        timeout,
+        extra={"check": check_type, "target": target, "scanner_timeout": timeout},
+    )
     try:
         result = await asyncio.wait_for(fn(target, timeout), timeout=timeout + _SCHEDULING_BUFFER)
         duration_ms = int((time.monotonic() - start) * 1000)
         logger.info(
-            "check done",
+            "%s finished on %s in %dms — %d findings%s",
+            check_type,
+            target,
+            duration_ms,
+            len(result.findings),
+            f", error: {result.error}" if result.error else "",
             extra={
                 "check": check_type,
                 "target": target,
@@ -78,20 +90,32 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
     except TimeoutError:
         duration_ms = int((time.monotonic() - start) * 1000)
         logger.warning(
-            "check timeout",
+            "%s TIMEOUT on %s after %dms (budget was %.1fs)",
+            check_type,
+            target,
+            duration_ms,
+            timeout,
             extra={"check": check_type, "target": target, "duration_ms": duration_ms, "scanner_timeout": timeout},
         )
         return CheckResult(check=check_type, error=f"Scanner {check_type} timed out after {timeout}s")
     except Exception as exc:
         duration_ms = int((time.monotonic() - start) * 1000)
         logger.error(
-            "check error",
+            "%s ERROR on %s after %dms (budget was %.1fs): %s: %s",
+            check_type,
+            target,
+            duration_ms,
+            timeout,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
             extra={
                 "check": check_type,
                 "target": target,
                 "duration_ms": duration_ms,
                 "scanner_timeout": timeout,
                 "error": str(exc),
+                "error_type": type(exc).__name__,
             },
         )
         return CheckResult(check=check_type, error=f"Scanner {check_type} failed: {exc}")
@@ -164,20 +188,35 @@ async def _run_scan_with_validator(
 ) -> ScanResponse:
     """Shared orchestration for all scan endpoints (generic, domain, IP)."""
     contexts = [validator(raw) for raw in targets]
+    check_names = [str(c) for c in checks]
     logger.info(
-        "scan started",
+        "scan started: %d target(s) × %d checks [%s]",
+        len(targets),
+        len(checks),
+        ", ".join(check_names),
         extra={
             "targets": targets,
-            "checks": [str(c) for c in checks],
+            "checks": check_names,
             "resolved_ips": {str(ctx): list(ctx.resolved_ips) for ctx in contexts},
         },
     )
     start = time.monotonic()
     target_results = await asyncio.gather(*[_scan_target(ctx, checks) for ctx in contexts])
     for tr in target_results:
-        logger.info("target done", extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms})
+        logger.info(
+            "target done: %s → score=%s in %dms",
+            tr.target,
+            tr.score,
+            tr.duration_ms,
+            extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms},
+        )
     duration_ms = int((time.monotonic() - start) * 1000)
-    logger.info("scan done", extra={"targets_count": len(targets), "duration_ms": duration_ms})
+    logger.info(
+        "scan done: %d target(s) in %dms",
+        len(targets),
+        duration_ms,
+        extra={"targets_count": len(targets), "duration_ms": duration_ms},
+    )
     return ScanResponse(results=list(target_results))
 
 
@@ -201,11 +240,17 @@ async def _run_single_check(
 ) -> TargetResult:
     """Shared orchestration for all single-check endpoints (generic, domain, IP)."""
     ctx = validator(target)
+    timeout = settings.deep_scanner_timeout if check_type in _DEEP_CHECKS else settings.scanner_timeout
     logger.info(
-        "check started",
+        "check request: %s on %s (timeout=%.1fs, ips=%s)",
+        check_type,
+        target,
+        timeout,
+        list(ctx.resolved_ips),
         extra={
             "target": target,
             "check": str(check_type),
+            "scanner_timeout": timeout,
             "resolved_ips": list(ctx.resolved_ips),
         },
     )
@@ -213,8 +258,17 @@ async def _run_single_check(
     result = await _scan_target(ctx, [check_type])
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info(
-        "check request done",
-        extra={"target": target, "check": str(check_type), "score": result.score, "duration_ms": duration_ms},
+        "check request done: %s on %s → score=%s in %dms",
+        check_type,
+        target,
+        result.score,
+        duration_ms,
+        extra={
+            "target": target,
+            "check": str(check_type),
+            "score": result.score,
+            "duration_ms": duration_ms,
+        },
     )
     return result
 
@@ -319,7 +373,14 @@ async def _run_scan_job(
         result = await _run_full_scan(request)
         await store.complete(job_id, result)
     except Exception as exc:
-        logger.error("async scan job failed", extra={"job_id": job_id, "error": str(exc)})
+        logger.error(
+            "async scan job %s failed: %s: %s",
+            job_id,
+            type(exc).__name__,
+            exc,
+            exc_info=True,
+            extra={"job_id": job_id, "error": str(exc), "error_type": type(exc).__name__},
+        )
         await store.fail(job_id, str(exc))
 
     if webhook_url:

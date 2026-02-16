@@ -105,14 +105,19 @@ def test_json_formatter_exception():
 
 
 def test_scanner_logs_on_check(client, caplog):
-    """Scanner should produce 'check done' log with expected fields."""
+    """Scanner should produce started/finished logs with expected fields."""
     with caplog.at_level(logging.INFO, logger="infraprobe.scanner"):
         client.post("/v1/check/headers", json={"target": "example.com"})
 
-    check_done = [r for r in caplog.records if r.message == "check done"]
-    assert len(check_done) == 1
+    started = [r for r in caplog.records if "started on" in r.message]
+    assert len(started) == 1
+    assert started[0].check == "headers"
+    assert started[0].scanner_timeout > 0
 
-    record = check_done[0]
+    finished = [r for r in caplog.records if "finished on" in r.message]
+    assert len(finished) == 1
+
+    record = finished[0]
     assert record.check == "headers"
     assert record.target == "example.com"
     assert isinstance(record.duration_ms, int)
@@ -155,17 +160,17 @@ def test_blocked_target_logged(client, caplog):
 
 
 def test_scan_bundle_logs(client, caplog):
-    """Bundle scan should log scan started, check done per check, target done."""
+    """Bundle scan should log scan started, finished per check, target done, scan done."""
     with caplog.at_level(logging.INFO, logger="infraprobe"):
         client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers", "ssl"]})
 
     messages = [r.message for r in caplog.records]
-    assert "scan started" in messages
-    assert messages.count("check done") == 2  # headers + ssl
-    assert "target done" in messages
-    assert "scan done" in messages
+    assert any("scan started:" in m for m in messages)
+    assert sum("finished on" in m for m in messages) == 2  # headers + ssl
+    assert any("target done:" in m for m in messages)
+    assert any("scan done:" in m for m in messages)
 
-    scan_started = next(r for r in caplog.records if r.message == "scan started")
+    scan_started = next(r for r in caplog.records if "scan started:" in r.message)
     assert scan_started.targets == ["example.com"]
     assert set(scan_started.checks) == {"headers", "ssl"}
 
