@@ -1,4 +1,4 @@
-.PHONY: run scan
+.PHONY: run scan verify
 
 # Start (or restart) the dev server on port 8080
 run:
@@ -12,3 +12,7 @@ scan:
 	curl -s http://localhost:8080/v1/scan \
 		-H 'Content-Type: application/json' \
 		-d '{"targets": ["$(TARGET)"]}' | python3 -m json.tool
+
+# Verify deployed instance (reads URL + secret from .envs/)
+verify:
+	uv run python scripts/verify_deploy.py $(ARGS)

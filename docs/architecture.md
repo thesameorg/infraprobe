@@ -72,6 +72,9 @@ src/infraprobe/
         ├── ssl.py      # Deep SSL/TLS scan (SSLyze)
         ├── dns.py      # Deep DNS scan (checkdmarc)
         └── tech.py     # Deep tech detection (Wappalyzer)
+
+scripts/
+└── verify_deploy.py    # Deployment verification — hits every endpoint, reports pass/fail
 ```
 
 Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for dev: `main.py` (runs uvicorn with reload).
@@ -270,8 +273,10 @@ Local dev: `docker-compose.yaml` mounts source as volume, enables `--reload`, ma
 
 ## Current State
 
-**Deployed:** Live on Google Cloud Run (`infraprobe-tzhg2ptrea-uc.a.run.app`). Cloud Run handles auth via identity tokens. CI/CD pipeline pushes on every `main` merge.
+**Deployed:** Live on Google Cloud Run. URL stored in `.envs/deployed.url`, RapidAPI proxy secret in `.envs/rapidapi_proxy_secret.txt`. CI/CD pipeline pushes on every `main` merge.
 
-**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `tech_deep`, `blacklist`, `web` — all registered and accessible via both bundle and individual endpoints. `web` is opt-in (not in default `LIGHT_CHECKS`).
+**Deployment verification:** `scripts/verify_deploy.py` tests all endpoints against a live instance — health, every light and deep scanner, bundle/domain/IP scans, async job flow (submit → poll → report), output formats (JSON, SARIF, CSV), error handling (SSRF block, validation), and auth enforcement. Reads URL and secret from `.envs/` by default; also supports `uv run python scripts/verify_deploy.py http://localhost:8080` for local dev.
 
-**Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting, app-level auth, structured logging, async job queue. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
+**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `tech_deep`, `blacklist`, `blacklist_deep`, `web`, `whois`, `ports`, `ports_deep`, `cve` — all registered and accessible via both bundle and individual endpoints. `web`, `ports`, `ports_deep`, and `cve` are opt-in (not in default checks).
+
+**Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting, structured logging. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
