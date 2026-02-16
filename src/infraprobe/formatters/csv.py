@@ -10,7 +10,7 @@ import json
 
 from infraprobe.models import ScanResponse, TargetResult
 
-_COLUMNS = ["target", "check", "severity", "title", "description", "details", "score"]
+_COLUMNS = ["target", "check", "severity", "title", "description", "details"]
 
 
 def scan_response_to_csv(response: ScanResponse) -> str:
@@ -32,7 +32,6 @@ def target_result_to_csv(result: TargetResult) -> str:
 
 def _write_target(writer: csv.writer, target_result: TargetResult) -> None:
     target = target_result.target
-    score = target_result.score
 
     for check_name, check_result in target_result.results.items():
         if check_result.findings:
@@ -45,7 +44,6 @@ def _write_target(writer: csv.writer, target_result: TargetResult) -> None:
                         finding.title,
                         finding.description,
                         json.dumps(finding.details) if finding.details else "",
-                        score,
                     ]
                 )
         elif check_result.error:
@@ -57,6 +55,5 @@ def _write_target(writer: csv.writer, target_result: TargetResult) -> None:
                     "Scanner error",
                     check_result.error,
                     "",
-                    score,
                 ]
             )

@@ -41,7 +41,7 @@ def test_async_scan_poll_until_completed(client: TestClient):
     assert job["status"] == "completed"
     assert job["result"] is not None
     assert len(job["result"]["results"]) == 1
-    assert job["result"]["results"][0]["score"] is not None
+    assert job["result"]["results"][0]["target"] is not None
 
 
 def test_async_scan_echoes_request(client: TestClient):

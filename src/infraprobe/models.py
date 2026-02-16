@@ -96,18 +96,8 @@ class IpScanRequest(BaseModel):
     checks: list[CheckType] = Field(default_factory=lambda: list(IP_CHECKS))
 
 
-class SeveritySummary(BaseModel):
-    critical: int = 0
-    high: int = 0
-    medium: int = 0
-    low: int = 0
-    info: int = 0
-
-
 class TargetResult(BaseModel):
     target: str
-    score: str
-    summary: SeveritySummary
     results: dict[str, CheckResult]
     duration_ms: int
 

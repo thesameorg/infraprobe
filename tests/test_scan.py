@@ -13,7 +13,6 @@ def test_scan_headers_vulnweb(client):
     data = resp.json()
     result = data["results"][0]
     assert result["target"] == "testphp.vulnweb.com"
-    assert result["score"] in ("A+", "A", "B+", "B", "C", "D", "F")
     assert result["duration_ms"] > 0
 
     # vulnweb leaks Server and X-Powered-By, so we expect findings
@@ -59,7 +58,6 @@ def test_scan_example_com(client):
     resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
     assert resp.status_code == 200
     result = resp.json()["results"][0]
-    assert result["score"] is not None
     assert len(result["results"]["headers"]["findings"]) > 0
 
 
@@ -414,7 +412,6 @@ def test_check_headers(client):
 
     data = resp.json()
     assert data["target"] == "example.com"
-    assert data["score"] is not None
     assert "headers" in data["results"]
     assert data["results"]["headers"]["error"] is None
     assert data["duration_ms"] > 0
@@ -541,7 +538,6 @@ def test_scan_domain_works(client):
     data = resp.json()
     result = data["results"][0]
     assert result["target"] == "testphp.vulnweb.com"
-    assert result["score"] is not None
     # Default domain checks include dns
     assert "dns" in result["results"]
 
@@ -581,7 +577,6 @@ def test_scan_ip_works(client):
     data = resp.json()
     result = data["results"][0]
     assert result["target"] == "44.228.249.3"
-    assert result["score"] is not None
     # IP default checks should NOT include dns
     assert "dns" not in result["results"]
     # Should include ssl and headers

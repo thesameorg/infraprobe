@@ -18,7 +18,6 @@ from infraprobe.models import (
     ScanRequest,
     ScanResponse,
     Severity,
-    SeveritySummary,
     TargetResult,
 )
 
@@ -38,8 +37,6 @@ def _check_result(check: CheckType, findings: list[Finding] | None = None, error
 def _target_result(target: str, results: dict[str, CheckResult]) -> TargetResult:
     return TargetResult(
         target=target,
-        score="B",
-        summary=SeveritySummary(),
         results=results,
         duration_ms=100,
     )
@@ -255,7 +252,7 @@ class TestCsvStructure:
     def test_header_row(self):
         tr = _target_result("example.com", {"headers": _check_result(CheckType.HEADERS)})
         rows = _parse_csv(target_result_to_csv(tr))
-        assert rows[0] == ["target", "check", "severity", "title", "description", "details", "score"]
+        assert rows[0] == ["target", "check", "severity", "title", "description", "details"]
 
     def test_finding_produces_row(self):
         finding = _finding(Severity.HIGH, "Missing HSTS", "No HSTS header found")
@@ -268,7 +265,7 @@ class TestCsvStructure:
         assert row[2] == "high"
         assert row[3] == "Missing HSTS"
         assert row[4] == "No HSTS header found"
-        assert row[6] == "B"
+        assert row[5] == ""  # empty details
 
     def test_multiple_findings(self):
         findings = [
@@ -328,7 +325,7 @@ class TestCsvStructure:
         )
         rows = _parse_csv(target_result_to_csv(tr))
         for row in rows:
-            assert len(row) == 7
+            assert len(row) == 6
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +341,7 @@ class TestCsvFormatQueryParam:
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/csv")
         rows = _parse_csv(resp.text)
-        assert rows[0] == ["target", "check", "severity", "title", "description", "details", "score"]
+        assert rows[0] == ["target", "check", "severity", "title", "description", "details"]
         assert len(rows) > 1  # at least one finding
 
     def test_csv_format_on_check_headers(self, client):
@@ -441,7 +438,7 @@ class TestGetScanReport:
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/csv")
         rows = _parse_csv(resp.text)
-        assert rows[0] == ["target", "check", "severity", "title", "description", "details", "score"]
+        assert rows[0] == ["target", "check", "severity", "title", "description", "details"]
         assert len(rows) == 2
         assert rows[1][0] == "example.com"
 

@@ -141,7 +141,7 @@ def probe_single_checks(client: httpx.Client, stats: Stats, *, deep: bool = Fals
     for ct in checks:
         path = f"/v1/{prefix}/{ct}"
         resp = client.post(path, json={"target": TEST_DOMAIN})
-        body = check_response(stats, f"POST {path}", resp, must_have_keys=["target", "score", "results"])
+        body = check_response(stats, f"POST {path}", resp, must_have_keys=["target", "results"])
         if body and isinstance(body, dict):
             results = body.get("results", {})
             check_key = ct.removesuffix("_deep") if deep else ct
@@ -159,7 +159,7 @@ def probe_bundle_scan(client: httpx.Client, stats: Stats) -> None:
             stats.record_fail("  empty results list")
         else:
             tr = results[0]
-            print(f"       {DIM}target={tr.get('target')}  score={tr.get('score')}  checks={list(tr.get('results', {}).keys())}{RESET}")
+            print(f"       {DIM}target={tr.get('target')}  checks={list(tr.get('results', {}).keys())}{RESET}")
 
 
 def probe_domain_endpoints(client: httpx.Client, stats: Stats) -> None:
@@ -169,7 +169,7 @@ def probe_domain_endpoints(client: httpx.Client, stats: Stats) -> None:
     check_response(stats, "POST /v1/scan_domain", resp, must_have_keys=["results"])
 
     resp = client.post("/v1/check_domain/headers", json={"target": TEST_DOMAIN})
-    check_response(stats, "POST /v1/check_domain/headers", resp, must_have_keys=["target", "score"])
+    check_response(stats, "POST /v1/check_domain/headers", resp, must_have_keys=["target", "results"])
 
     # should reject IP target
     resp = client.post("/v1/scan_domain", json={"targets": [TEST_IP]})
@@ -186,7 +186,7 @@ def probe_ip_endpoints(client: httpx.Client, stats: Stats) -> None:
     check_response(stats, "POST /v1/scan_ip", resp, must_have_keys=["results"])
 
     resp = client.post("/v1/check_ip/headers", json={"target": TEST_IP})
-    check_response(stats, "POST /v1/check_ip/headers", resp, must_have_keys=["target", "score"])
+    check_response(stats, "POST /v1/check_ip/headers", resp, must_have_keys=["target", "results"])
 
     # should reject domain target
     resp = client.post("/v1/scan_ip", json={"targets": [TEST_DOMAIN]})

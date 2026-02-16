@@ -8,7 +8,7 @@ Technical architecture for InfraProbe. Covers system design, component structure
 
 InfraProbe is a stateless HTTP API that runs security checks against infrastructure targets. Two endpoint styles exist under `/v1`:
 
-- **`POST /v1/scan`** — bundle endpoint. Accepts one or more targets and check types, executes all checks concurrently, scores the results, and returns a `ScanResponse`.
+- **`POST /v1/scan`** — bundle endpoint. Accepts one or more targets and check types, executes all checks concurrently, and returns a `ScanResponse`.
 - **`POST /v1/check/{type}`** — light scanner endpoints (e.g. `/v1/check/headers`). Accepts a single target, runs one scanner, returns a `TargetResult`.
 - **`POST /v1/check_deep/{type}`** — deep scanner endpoints (e.g. `/v1/check_deep/ssl`). Same contract as light checks. Each is a separate route in OpenAPI for per-endpoint RapidAPI monetization.
 
@@ -36,12 +36,12 @@ Client
 │  └────────────────────────────────────────────┘  │
 │         │                                        │
 │         ▼                                        │
-│  ┌─────────────┐  ┌──────────────┐               │
-│  │ scoring.py  │  │ blocklist.py │               │
-│  └─────────────┘  └──────────────┘               │
+│  ┌──────────────┐                                │
+│  │ blocklist.py │                                │
+│  └──────────────┘                                │
 └──────────────────────────────────────────────────┘
   │
-  │  200 OK {results: [{target, score, findings, ...}]}
+  │  200 OK {results: [{target, results, findings, ...}]}
   ▼
 Client
 ```
@@ -56,7 +56,6 @@ src/infraprobe/
 ├── app.py              # FastAPI instance, scanner registration, exception handlers, /health
 ├── config.py           # pydantic-settings (INFRAPROBE_ env prefix)
 ├── models.py           # Pydantic models + enums (Severity, CheckType)
-├── scoring.py          # Findings → numeric score → letter grade
 ├── blocklist.py        # SSRF protection: block private/reserved IPs (urllib.parse-based)
 ├── http.py             # Shared HTTP client (scanner_client, fetch_with_fallback)
 ├── api/
@@ -100,8 +99,7 @@ Owns the full lifecycle of a scan request. Serves two endpoint styles:
 2. Resolve and validate each target through `blocklist.validate_target()` — rejects private IPs (SSRF protection) and unresolvable domains. Validation errors propagate as exceptions and are caught by global exception handlers in `app.py`.
 3. Fan out: `asyncio.gather` over targets, then `asyncio.gather` over checks per target
 4. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + SCHEDULING_BUFFER)` — the single timeout enforcement point
-5. Collect all `CheckResult`s, aggregate findings, pass to `scoring.calculate_score()`
-6. Return `ScanResponse`
+5. Collect all `CheckResult`s, return `ScanResponse`
 
 **Individual (`POST /check/{type}` and `POST /check_deep/{type}`):**
 1. Validate and parse `SingleCheckRequest` (single target)
@@ -130,12 +128,6 @@ SSRF protection layer. Called before any scanner runs.
 - If domain: resolves via DNS, checks every resolved IP against the same blocklist
 - Raises `BlockedTargetError` (→ HTTP 400) or `InvalidTargetError` (→ HTTP 422), caught by global exception handlers in `app.py`
 
-### Scoring (`scoring.py`)
-
-Pure function: `calculate_score(findings: list[Finding]) -> tuple[str, SeveritySummary]`.
-
-Starts at 100 points, deducts per finding severity: CRITICAL -40, HIGH -20, MEDIUM -10, LOW -3, INFO 0. Clamped to [0, 100]. Maps to letter grade: A+ (100), A (90+), B+ (85+), B (80+), C (70+), D (60+), F (<60).
-
 ### Config (`config.py`)
 
 `pydantic-settings` with `INFRAPROBE_` env prefix. Singleton `settings` instance.
@@ -159,17 +151,17 @@ ScanRequest                    SingleCheckRequest
 
 ScanResponse                   TargetResult
 └── results: list[TargetResult] ├── target: str
-                               ├── score: str (A+ .. F)
-CheckResult                    ├── summary: SeveritySummary
-├── check: CheckType           ├── results: dict[str, CheckResult]
-├── findings: list[Finding]    └── duration_ms: int
+                               ├── results: dict[str, CheckResult]
+CheckResult                    └── duration_ms: int
+├── check: CheckType
+├── findings: list[Finding]
 ├── raw: dict[str, Any]
-└── error: str | None          SeveritySummary
-                               ├── critical: int
-Finding                        ├── high: int
-├── severity: Severity         ├── medium: int
-├── title: str                 ├── low: int
-├── description: str           └── info: int
+└── error: str | None
+
+Finding
+├── severity: Severity
+├── title: str
+├── description: str
 └── details: dict[str, Any]
 ```
 

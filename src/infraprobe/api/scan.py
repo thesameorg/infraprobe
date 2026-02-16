@@ -28,7 +28,6 @@ from infraprobe.models import (
     SingleCheckRequest,
     TargetResult,
 )
-from infraprobe.scoring import calculate_score
 from infraprobe.storage.base import JobStore
 from infraprobe.target import ScanContext
 from infraprobe.webhook import _validate_webhook_url, maybe_deliver_webhook
@@ -138,19 +137,14 @@ async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResul
     ]
     results: list[CheckResult] = await asyncio.gather(*tasks)
 
-    all_findings = []
     results_map: dict[str, CheckResult] = {}
     for r in results:
         results_map[r.check] = r
-        all_findings.extend(r.findings)
 
-    score, summary = calculate_score(all_findings)
     duration_ms = int((time.monotonic() - start) * 1000)
 
     return TargetResult(
         target=target_str,
-        score=score,
-        summary=summary,
         results=results_map,
         duration_ms=duration_ms,
     )
@@ -204,11 +198,10 @@ async def _run_scan_with_validator(
     target_results = await asyncio.gather(*[_scan_target(ctx, checks) for ctx in contexts])
     for tr in target_results:
         logger.info(
-            "target done: %s → score=%s in %dms",
+            "target done: %s in %dms",
             tr.target,
-            tr.score,
             tr.duration_ms,
-            extra={"target": tr.target, "score": tr.score, "duration_ms": tr.duration_ms},
+            extra={"target": tr.target, "duration_ms": tr.duration_ms},
         )
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info(
@@ -258,15 +251,13 @@ async def _run_single_check(
     result = await _scan_target(ctx, [check_type])
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info(
-        "check request done: %s on %s → score=%s in %dms",
+        "check request done: %s on %s in %dms",
         check_type,
         target,
-        result.score,
         duration_ms,
         extra={
             "target": target,
             "check": str(check_type),
-            "score": result.score,
             "duration_ms": duration_ms,
         },
     )
