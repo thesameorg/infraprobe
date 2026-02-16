@@ -9,7 +9,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from infraprobe.blocklist import InvalidTargetError, validate_domain, validate_ip, validate_target
+from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, validate_domain, validate_ip, validate_target
 from infraprobe.config import settings
 from infraprobe.formatters.csv import scan_response_to_csv, target_result_to_csv
 from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
@@ -31,6 +31,7 @@ from infraprobe.models import (
 from infraprobe.scoring import calculate_score
 from infraprobe.storage.base import JobStore
 from infraprobe.target import ScanContext
+from infraprobe.webhook import _validate_webhook_url, maybe_deliver_webhook
 
 router = APIRouter()
 logger = logging.getLogger("infraprobe.scanner")
@@ -306,7 +307,13 @@ async def check_ip(
 _background_tasks: set[asyncio.Task] = set()
 
 
-async def _run_scan_job(store: JobStore, job_id: str, request: ScanRequest) -> None:
+async def _run_scan_job(
+    store: JobStore,
+    job_id: str,
+    request: ScanRequest,
+    webhook_url: str | None = None,
+    webhook_secret: str | None = None,
+) -> None:
     try:
         await store.update_status(job_id, JobStatus.RUNNING)
         result = await _run_full_scan(request)
@@ -315,6 +322,18 @@ async def _run_scan_job(store: JobStore, job_id: str, request: ScanRequest) -> N
         logger.error("async scan job failed", extra={"job_id": job_id, "error": str(exc)})
         await store.fail(job_id, str(exc))
 
+    if webhook_url:
+        job = await store.get(job_id)
+        if job:
+            await maybe_deliver_webhook(
+                job,
+                webhook_url,
+                webhook_secret,
+                store=store,
+                timeout=settings.webhook_timeout,
+                max_retries=settings.webhook_max_retries,
+            )
+
 
 @router.post("/scan/async", status_code=202, response_model=JobCreate)
 async def scan_async(request: ScanRequest, req: Request) -> JobCreate:
@@ -322,11 +341,22 @@ async def scan_async(request: ScanRequest, req: Request) -> JobCreate:
     for raw in request.targets:
         validate_target(raw)
 
+    # Validate webhook URL (SSRF protection)
+    webhook_url = request.webhook_url
+    webhook_secret = request.webhook_secret
+    if webhook_url:
+        try:
+            _validate_webhook_url(webhook_url)
+        except BlockedTargetError as exc:
+            raise InvalidTargetError(str(exc)) from exc
+        except ValueError as exc:
+            raise InvalidTargetError(str(exc)) from exc
+
     store: JobStore = req.app.state.job_store
     job_id = uuid.uuid4().hex
     job = await store.create(job_id, request)
 
-    task = asyncio.create_task(_run_scan_job(store, job_id, request))
+    task = asyncio.create_task(_run_scan_job(store, job_id, request, webhook_url, webhook_secret))
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 

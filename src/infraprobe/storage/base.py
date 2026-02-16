@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Protocol
 
 from infraprobe.models import Job, JobStatus, ScanRequest, ScanResponse
@@ -13,3 +14,5 @@ class JobStore(Protocol):
     async def complete(self, job_id: str, result: ScanResponse) -> None: ...
 
     async def fail(self, job_id: str, error: str) -> None: ...
+
+    async def update_webhook_status(self, job_id: str, status: str, delivered_at: datetime | None) -> None: ...

@@ -58,6 +58,14 @@ class MemoryJobStore:
         job.error = error
         job.updated_at = datetime.now(UTC)
 
+    async def update_webhook_status(self, job_id: str, status: str, delivered_at: datetime | None) -> None:
+        job = self._jobs.get(job_id)
+        if job is None:
+            return
+        job.webhook_status = status
+        job.webhook_delivered_at = delivered_at
+        job.updated_at = datetime.now(UTC)
+
     def _is_expired(self, job: Job) -> bool:
         age = (datetime.now(UTC) - job.created_at).total_seconds()
         return age > self._ttl_seconds

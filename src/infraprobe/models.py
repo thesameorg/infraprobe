@@ -82,6 +82,8 @@ class SingleCheckRequest(BaseModel):
 class ScanRequest(BaseModel):
     targets: list[str] = Field(min_length=1, max_length=10)
     checks: list[CheckType] = Field(default_factory=lambda: list(LIGHT_CHECKS))
+    webhook_url: str | None = None
+    webhook_secret: str | None = Field(default=None, exclude=True)
 
 
 class DomainScanRequest(BaseModel):
@@ -140,3 +142,5 @@ class Job(BaseModel):
     request: ScanRequest
     result: ScanResponse | None = None
     error: str | None = None
+    webhook_status: str | None = None
+    webhook_delivered_at: datetime | None = None
