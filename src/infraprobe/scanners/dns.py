@@ -134,6 +134,14 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     try:
         resolver = dns.asyncresolver.Resolver()
         resolver.lifetime = timeout
+        # NOTE: resolver.lifetime is a shared budget across ALL queries on this
+        # instance.  When many queries run in parallel, fast ones consume part of
+        # the budget and slow queries (e.g. TXT for domains with many records)
+        # may hit LifetimeTimeout even though the wall-clock time per query is
+        # reasonable.  Some consumer-grade DNS resolvers also struggle with large
+        # TXT responses (UDP truncation → TCP retry loop), which amplifies this.
+        # A future improvement could give each query its own Resolver instance or
+        # fall back to a public DNS server (8.8.8.8 / 1.1.1.1) on timeout.
 
         # Resolve all standard record types in parallel
         tasks = {rdtype: _resolve(resolver, domain, rdtype) for rdtype in _RECORD_TYPES}

@@ -95,6 +95,8 @@ What you don't need to change:
 
 **Request takes too long:** Check `duration_ms` in `TargetResult`. All scanners run in parallel, so total time ≈ slowest scanner. Validate with `INFRAPROBE_SCANNER_TIMEOUT=2`.
 
+**DNS scanner times out on certain domains:** dnspython's `resolver.lifetime` is a shared budget across all queries on the same `Resolver` instance. Domains with many TXT records (e.g. `google.com`) can exhaust the budget when the system DNS resolver struggles with large responses (UDP truncation → TCP fallback retry loop). Public DNS (8.8.8.8) handles these fine. See comment in `scanners/dns.py` for details and potential fixes.
+
 ---
 
 ## What Scanners Should Not Do (YAGNI)
