@@ -1,8 +1,10 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import BaseModel, Field
+
+TargetStr = Annotated[str, Field(max_length=2048)]
 
 
 class OutputFormat(StrEnum):
@@ -76,23 +78,23 @@ class CheckResult(BaseModel):
 
 
 class SingleCheckRequest(BaseModel):
-    target: str
+    target: TargetStr
 
 
 class ScanRequest(BaseModel):
-    targets: list[str] = Field(min_length=1, max_length=10)
+    targets: list[TargetStr] = Field(min_length=1, max_length=10)
     checks: list[CheckType] = Field(default_factory=lambda: list(LIGHT_CHECKS))
-    webhook_url: str | None = None
+    webhook_url: Annotated[str, Field(max_length=2048)] | None = None
     webhook_secret: str | None = Field(default=None, exclude=True)
 
 
 class DomainScanRequest(BaseModel):
-    targets: list[str] = Field(min_length=1, max_length=10)
+    targets: list[TargetStr] = Field(min_length=1, max_length=10)
     checks: list[CheckType] = Field(default_factory=lambda: list(DOMAIN_CHECKS))
 
 
 class IpScanRequest(BaseModel):
-    targets: list[str] = Field(min_length=1, max_length=10)
+    targets: list[TargetStr] = Field(min_length=1, max_length=10)
     checks: list[CheckType] = Field(default_factory=lambda: list(IP_CHECKS))
 
 
@@ -109,6 +111,11 @@ class ScanResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Async job models
 # ---------------------------------------------------------------------------
+
+
+class ErrorResponse(BaseModel):
+    error: str
+    detail: str
 
 
 class JobStatus(StrEnum):

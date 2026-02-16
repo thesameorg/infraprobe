@@ -17,6 +17,7 @@ dependencies = [
     "drheaderplus>=3.0.0",
     "python-nmap>=0.7.1",
     "asyncwhois>=1.1.12",
+    "prometheus-client>=0.21",
 ]
 
 [build-system]
@@ -29,6 +30,8 @@ packages = ["src/infraprobe"]
 [dependency-groups]
 dev = [
     "httpx>=0.28",
+    "locust>=2.32",
+    "pip-audit>=2.7",
     "pytest>=8",
     "pytest-asyncio>=0.25",
     "pytest-httpserver>=1.1.5",

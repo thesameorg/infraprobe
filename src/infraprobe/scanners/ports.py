@@ -8,6 +8,7 @@ from typing import Any
 import nmap
 
 from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, validate_target
+from infraprobe.config import nmap_semaphore
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
 from infraprobe.target import parse_target
 
@@ -196,7 +197,8 @@ async def _run_scan(check_type: CheckType, target: str, timeout: float, deep: bo
         else:
             args += " --top-ports 20"
 
-        raw = await asyncio.to_thread(_run_nmap, nmap_host, args)
+        async with nmap_semaphore():
+            raw = await asyncio.to_thread(_run_nmap, nmap_host, args)
         raw["host"] = host  # display original hostname, not resolved IP
 
         findings: list[Finding] = []

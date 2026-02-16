@@ -29,6 +29,8 @@ The `target` string is the normalized host (or host:port). A `ScanContext` (from
 
 6. **Deterministic check type.** Always return `CheckResult(check=CheckType.YOUR_TYPE, ...)`. The check field must match the scanner's registered type.
 
+7. **Nmap concurrency limit.** Scanners that spawn nmap subprocesses (via `asyncio.to_thread`) must acquire the shared semaphore first: `async with nmap_semaphore(): await asyncio.to_thread(...)`. Import from `infraprobe.config`. This prevents OOM when multiple nmap-based scans run concurrently.
+
 ---
 
 ## Timeout Layering

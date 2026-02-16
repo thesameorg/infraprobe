@@ -53,9 +53,10 @@ Client
 ```
 src/infraprobe/
 ├── __init__.py
-├── app.py              # FastAPI instance, scanner registration, exception handlers, /health
-├── config.py           # pydantic-settings (INFRAPROBE_ env prefix)
-├── models.py           # Pydantic models + enums (Severity, CheckType)
+├── app.py              # FastAPI instance, scanner registration, exception handlers, /health, /health/ready, /metrics
+├── config.py           # pydantic-settings (INFRAPROBE_ env prefix), nmap_semaphore
+├── models.py           # Pydantic models + enums (Severity, CheckType, ErrorResponse)
+├── metrics.py          # Prometheus metrics (request count/duration, scanner duration, active scans)
 ├── blocklist.py        # SSRF protection: block private/reserved IPs (urllib.parse-based)
 ├── http.py             # Shared HTTP client (scanner_client, fetch_with_fallback)
 ├── api/
@@ -84,11 +85,13 @@ Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for d
 
 ### App (`app.py`)
 
-Creates the FastAPI instance. Registers scanners into the module-level registry in `api/scan.py` via `register_scanner(CheckType, scan_fn)`. Mounts the scan router under `/v1`. Exposes `GET /health`.
+Creates the FastAPI instance. Registers scanners into the module-level registry in `api/scan.py` via `register_scanner(CheckType, scan_fn)`. Mounts the scan router under `/v1`. Exposes `GET /health` (liveness), `GET /health/ready` (readiness — checks cleanup task is alive), and `GET /metrics` (Prometheus). Infrastructure paths (`/health`, `/health/ready`, `/metrics`) are excluded from logging and auth middleware.
 
-Global exception handlers convert `BlockedTargetError` → HTTP 400 and `InvalidTargetError` → HTTP 422, so endpoint code doesn't need per-route try/except for target validation.
+Global exception handlers return consistent `{"error": "<code>", "detail": "<message>"}` shapes: `BlockedTargetError` → 400 `blocked_target`, `InvalidTargetError` → 422 `invalid_target`, unhandled `Exception` → 500 `internal_error`.
 
 Optional RapidAPI proxy-secret middleware is enabled when `INFRAPROBE_RAPIDAPI_PROXY_SECRET` is set.
+
+Lifespan manages graceful shutdown: `drain_background_tasks(timeout=25)` waits for in-flight async scan jobs before stopping the cleanup loop.
 
 ### Orchestrator (`api/scan.py`)
 
@@ -130,23 +133,28 @@ SSRF protection layer. Called before any scanner runs.
 
 ### Config (`config.py`)
 
-`pydantic-settings` with `INFRAPROBE_` env prefix. Singleton `settings` instance.
+`pydantic-settings` with `INFRAPROBE_` env prefix. Singleton `settings` instance. All numeric settings have `Field` constraints (`gt=0`, `ge=1`, etc.) to reject invalid values at startup. `log_level` is validated against Python's logging levels.
 
-| Setting | Default | Env var |
-|---------|---------|---------|
-| `env` | `"development"` | `INFRAPROBE_ENV` |
-| `log_level` | `"info"` | `INFRAPROBE_LOG_LEVEL` |
-| `port` | `8080` | `INFRAPROBE_PORT` |
-| `scanner_timeout` | `10.0` | `INFRAPROBE_SCANNER_TIMEOUT` |
-| `deep_scanner_timeout` | `30.0` | `INFRAPROBE_DEEP_SCANNER_TIMEOUT` |
+| Setting | Default | Env var | Constraint |
+|---------|---------|---------|------------|
+| `env` | `"development"` | `INFRAPROBE_ENV` | — |
+| `log_level` | `"info"` | `INFRAPROBE_LOG_LEVEL` | valid Python log level |
+| `port` | `8080` | `INFRAPROBE_PORT` | `ge=1, le=65535` |
+| `scanner_timeout` | `10.0` | `INFRAPROBE_SCANNER_TIMEOUT` | `gt=0` |
+| `deep_scanner_timeout` | `30.0` | `INFRAPROBE_DEEP_SCANNER_TIMEOUT` | `gt=0` |
+| `nmap_max_concurrent` | `3` | `INFRAPROBE_NMAP_MAX_CONCURRENT` | `ge=1, le=10` |
+| `job_ttl_seconds` | `3600` | `INFRAPROBE_JOB_TTL_SECONDS` | `gt=0` |
+| `job_cleanup_interval` | `300` | `INFRAPROBE_JOB_CLEANUP_INTERVAL` | `gt=0` |
+| `webhook_timeout` | `5.0` | `INFRAPROBE_WEBHOOK_TIMEOUT` | `gt=0` |
+| `webhook_max_retries` | `3` | `INFRAPROBE_WEBHOOK_MAX_RETRIES` | `ge=0` |
 
 ---
 
 ## Data Model
 
 ```
-ScanRequest                    SingleCheckRequest
-├── targets: list[str] (1-10)  └── target: str
+ScanRequest                         SingleCheckRequest
+├── targets: list[TargetStr] (1-10)  └── target: TargetStr (max 2048 chars)
 └── checks: list[CheckType]
 
 ScanResponse                   TargetResult
@@ -192,7 +200,9 @@ _scan_target(A, ...):
     )
 ```
 
-Max concurrency for bundle: 10 targets x 8 check types = 80 tasks. Individual check endpoints run 1 task. All I/O-bound (HTTP, DNS, TLS handshakes). No semaphore or pool — not needed at this scale.
+Max concurrency for bundle: 10 targets x 8 check types = 80 tasks. Individual check endpoints run 1 task. All I/O-bound (HTTP, DNS, TLS handshakes).
+
+**Nmap semaphore:** Port and CVE scanners spawn nmap subprocesses via `asyncio.to_thread`. A shared `asyncio.Semaphore` (from `config.nmap_semaphore()`, default 3) limits concurrent nmap processes to prevent OOM under load.
 
 Total latency per request ≈ `max(scanner_timeout)` + scheduling overhead, not the sum.
 
@@ -213,12 +223,20 @@ Scanners never call `wait_for` on themselves. See `docs/check_approach.md` for t
 
 ## Error Model
 
-| Source | Scope | HTTP | Mechanism |
-|--------|-------|------|-----------|
-| Invalid/blocked target | Whole request | 400/422 | Global exception handlers in `app.py` catch `BlockedTargetError`/`InvalidTargetError` |
-| Scanner not registered | Single check | 200 | `CheckResult(error=...)` |
-| Scanner timeout | Single check | 200 | `wait_for` cancels, `CheckResult(error=...)` |
-| Scanner exception | Single check | 200 | Catch `Exception`, `CheckResult(error=...)` |
+All error responses use a consistent shape: `{"error": "<code>", "detail": "<message>"}`. The `detail` key is preserved for backward compatibility; the `error` key provides a machine-readable code.
+
+| Source | Scope | HTTP | Error code | Mechanism |
+|--------|-------|------|------------|-----------|
+| Blocked target | Whole request | 400 | `blocked_target` | Global exception handler |
+| Invalid target | Whole request | 422 | `invalid_target` | Global exception handler |
+| Auth rejected | Whole request | 403 | `forbidden` | RapidAPI middleware |
+| Job not found | Single job | 404 | `not_found` | Inline JSONResponse |
+| Job not ready | Single job | 409 | `job_not_ready` | Inline JSONResponse |
+| Shutting down | Async scan | 503 | `shutting_down` | Graceful shutdown flag |
+| Unhandled error | Whole request | 500 | `internal_error` | Catch-all handler |
+| Scanner not registered | Single check | 200 | — | `CheckResult(error=...)` |
+| Scanner timeout | Single check | 200 | — | `wait_for` cancels, `CheckResult(error=...)` |
+| Scanner exception | Single check | 200 | — | Catch `Exception`, `CheckResult(error=...)` |
 
 Only input validation fails the entire request. Scanner failures are isolated — one failing check never affects another. No retry at any level.
 
@@ -239,6 +257,7 @@ Push to main
   └─ CI (GitHub Actions)
        ├── ruff check + ruff format --check
        ├── ty check
+       ├── pip-audit (dependency vulnerability scanning)
        └── pytest
             └─ on success ─→ Deploy
                               ├── docker build + push to Artifact Registry
@@ -271,4 +290,20 @@ Local dev: `docker-compose.yaml` mounts source as volume, enables `--reload`, ma
 
 **Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `tech_deep`, `blacklist`, `blacklist_deep`, `web`, `whois`, `ports`, `ports_deep`, `cve` — all registered and accessible via both bundle and individual endpoints. `web`, `ports`, `ports_deep`, and `cve` are opt-in (not in default checks).
 
-**Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting, structured logging. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
+**Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
+
+---
+
+## Hardening
+
+Production robustness measures implemented:
+
+- **Config validation:** All numeric settings have Pydantic `Field` constraints; invalid values (e.g. `scanner_timeout=0`) are rejected at startup. `log_level` validated against Python's logging levels.
+- **Input limits:** `TargetStr` type enforces `max_length=2048` on all target strings and webhook URLs to prevent DoS via oversized payloads.
+- **Consistent error shapes:** All error responses use `{"error": "<code>", "detail": "<message>"}`. Catch-all `Exception` handler returns 500 `internal_error`.
+- **Job store hardening:** `asyncio.Lock` protects all `_jobs` dict access. Cleanup loop wrapped in `try/except` with `logger.exception()`. TTL expiration based on `updated_at` (not `created_at`) so active jobs aren't prematurely evicted.
+- **Nmap concurrency:** `asyncio.Semaphore` (configurable, default 3) limits concurrent nmap processes in port and CVE scanners to prevent OOM.
+- **Readiness probe:** `GET /health/ready` checks cleanup task is alive, returns 503 if not. Separate from liveness (`GET /health`).
+- **Graceful shutdown:** Lifespan shutdown drains in-flight background tasks (25s timeout) before stopping cleanup loop. New async scan requests during shutdown return 503.
+- **Prometheus metrics:** `GET /metrics` exposes request count/duration, scanner duration, and active scan gauges. Compatible with Cloud Run metrics scraping and any Prometheus-compatible collector.
+- **Dependency scanning:** `pip-audit` runs in CI before tests to catch known vulnerabilities in dependencies.

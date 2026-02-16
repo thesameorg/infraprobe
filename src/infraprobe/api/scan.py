@@ -13,6 +13,7 @@ from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, validat
 from infraprobe.config import settings
 from infraprobe.formatters.csv import scan_response_to_csv, target_result_to_csv
 from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
+from infraprobe.metrics import ACTIVE_SCANS, SCANNER_DURATION
 from infraprobe.models import (
     DNS_ONLY_CHECKS,
     CheckResult,
@@ -68,7 +69,9 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
     )
     try:
         result = await asyncio.wait_for(fn(target, timeout), timeout=timeout + _SCHEDULING_BUFFER)
-        duration_ms = int((time.monotonic() - start) * 1000)
+        duration_s = time.monotonic() - start
+        duration_ms = int(duration_s * 1000)
+        SCANNER_DURATION.labels(check=check_type).observe(duration_s)
         logger.info(
             "%s finished on %s in %dms — %d findings%s",
             check_type,
@@ -87,7 +90,9 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
         )
         return result
     except TimeoutError:
-        duration_ms = int((time.monotonic() - start) * 1000)
+        duration_s = time.monotonic() - start
+        duration_ms = int(duration_s * 1000)
+        SCANNER_DURATION.labels(check=check_type).observe(duration_s)
         logger.warning(
             "%s TIMEOUT on %s after %dms (budget was %.1fs)",
             check_type,
@@ -98,7 +103,9 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
         )
         return CheckResult(check=check_type, error=f"Scanner {check_type} timed out after {timeout}s")
     except Exception as exc:
-        duration_ms = int((time.monotonic() - start) * 1000)
+        duration_s = time.monotonic() - start
+        duration_ms = int(duration_s * 1000)
+        SCANNER_DURATION.labels(check=check_type).observe(duration_s)
         logger.error(
             "%s ERROR on %s after %dms (budget was %.1fs): %s: %s",
             check_type,
@@ -124,30 +131,34 @@ _DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep", "blacklist_deep",
 
 
 async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResult:
+    ACTIVE_SCANS.inc()
     start = time.monotonic()
     target_str = str(ctx)
 
-    tasks = [
-        _run_scanner(
-            ct,
-            target_str,
-            settings.deep_scanner_timeout if ct in _DEEP_CHECKS else settings.scanner_timeout,
+    try:
+        tasks = [
+            _run_scanner(
+                ct,
+                target_str,
+                settings.deep_scanner_timeout if ct in _DEEP_CHECKS else settings.scanner_timeout,
+            )
+            for ct in checks
+        ]
+        results: list[CheckResult] = await asyncio.gather(*tasks)
+
+        results_map: dict[str, CheckResult] = {}
+        for r in results:
+            results_map[r.check] = r
+
+        duration_ms = int((time.monotonic() - start) * 1000)
+
+        return TargetResult(
+            target=target_str,
+            results=results_map,
+            duration_ms=duration_ms,
         )
-        for ct in checks
-    ]
-    results: list[CheckResult] = await asyncio.gather(*tasks)
-
-    results_map: dict[str, CheckResult] = {}
-    for r in results:
-        results_map[r.check] = r
-
-    duration_ms = int((time.monotonic() - start) * 1000)
-
-    return TargetResult(
-        target=target_str,
-        results=results_map,
-        duration_ms=duration_ms,
-    )
+    finally:
+        ACTIVE_SCANS.dec()
 
 
 _SARIF_MEDIA_TYPE = "application/sarif+json"
@@ -350,6 +361,27 @@ async def check_ip(
 
 # Prevent GC of fire-and-forget tasks
 _background_tasks: set[asyncio.Task] = set()
+_shutting_down = False
+
+
+def reset_shutdown_flag() -> None:
+    """Reset the shutdown flag (called at lifespan startup)."""
+    global _shutting_down  # noqa: PLW0603
+    _shutting_down = False
+
+
+async def drain_background_tasks(timeout: float = 25) -> None:
+    """Wait for in-flight background scan tasks to finish (graceful shutdown)."""
+    global _shutting_down  # noqa: PLW0603
+    _shutting_down = True
+    if not _background_tasks:
+        return
+    logger.info("draining %d background tasks (timeout=%.0fs)", len(_background_tasks), timeout)
+    done, pending = await asyncio.wait(_background_tasks, timeout=timeout)
+    if pending:
+        logger.warning("cancelling %d background tasks after drain timeout", len(pending))
+        for task in pending:
+            task.cancel()
 
 
 async def _run_scan_job(
@@ -388,7 +420,10 @@ async def _run_scan_job(
 
 
 @router.post("/scan/async", status_code=202, response_model=JobCreate)
-async def scan_async(request: ScanRequest, req: Request) -> JobCreate:
+async def scan_async(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
+    if _shutting_down:
+        return JSONResponse(status_code=503, content={"error": "shutting_down", "detail": "Server is shutting down"})
+
     # Validate targets eagerly so 400/422 errors are returned synchronously
     for raw in request.targets:
         validate_target(raw)
@@ -420,7 +455,7 @@ async def get_scan_job(job_id: str, req: Request) -> Job | JSONResponse:
     store: JobStore = req.app.state.job_store
     job = await store.get(job_id)
     if job is None:
-        return JSONResponse(status_code=404, content={"detail": "Job not found"})
+        return JSONResponse(status_code=404, content={"error": "not_found", "detail": "Job not found"})
     return job
 
 
@@ -433,7 +468,9 @@ async def get_scan_report(
     store: JobStore = req.app.state.job_store
     job = await store.get(job_id)
     if job is None:
-        return JSONResponse(status_code=404, content={"detail": "Job not found"})
+        return JSONResponse(status_code=404, content={"error": "not_found", "detail": "Job not found"})
     if job.status != JobStatus.COMPLETED or job.result is None:
-        return JSONResponse(status_code=409, content={"detail": f"Job is {job.status}", "job_id": job_id})
+        return JSONResponse(
+            status_code=409, content={"error": "job_not_ready", "detail": f"Job is {job.status}", "job_id": job_id}
+        )
     return _format_scan_response(job.result, fmt)

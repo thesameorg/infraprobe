@@ -66,7 +66,9 @@ def test_async_scan_echoes_request(client: TestClient):
 def test_get_nonexistent_job_returns_404(client: TestClient):
     resp = client.get("/v1/scan/nonexistent123")
     assert resp.status_code == 404
-    assert resp.json()["detail"] == "Job not found"
+    body = resp.json()
+    assert body["detail"] == "Job not found"
+    assert body["error"] == "not_found"
 
 
 def test_async_scan_blocked_target_returns_400(client: TestClient):

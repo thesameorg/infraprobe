@@ -33,7 +33,9 @@ def test_scan_headers_vulnweb(client):
 def test_scan_blocked_ip(client):
     resp = client.post("/v1/scan", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
     assert resp.status_code == 400
-    assert "blocked" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert "blocked" in body["detail"].lower()
+    assert body["error"] == "blocked_target"
 
 
 def test_scan_invalid_target(client):
@@ -449,7 +451,9 @@ def test_check_blocked_target(client):
     """POST /v1/check/headers with blocked IP — should return 400."""
     resp = client.post("/v1/check/headers", json={"target": "127.0.0.1"})
     assert resp.status_code == 400
-    assert "blocked" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert "blocked" in body["detail"].lower()
+    assert body["error"] == "blocked_target"
 
 
 def test_unversioned_scan_removed(client):
@@ -546,7 +550,9 @@ def test_scan_domain_rejects_ip(client):
     """POST /v1/scan_domain with an IP — should return 422."""
     resp = client.post("/v1/scan_domain", json={"targets": ["93.184.216.34"]})
     assert resp.status_code == 422
-    assert "expected a domain" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert "expected a domain" in body["detail"].lower()
+    assert body["error"] == "invalid_target"
 
 
 def test_check_domain_headers(client):
@@ -588,14 +594,18 @@ def test_scan_ip_rejects_domain(client):
     """POST /v1/scan_ip with a domain — should return 422."""
     resp = client.post("/v1/scan_ip", json={"targets": ["testphp.vulnweb.com"]})
     assert resp.status_code == 422
-    assert "expected an ip" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert "expected an ip" in body["detail"].lower()
+    assert body["error"] == "invalid_target"
 
 
 def test_scan_ip_rejects_dns_check(client):
     """POST /v1/scan_ip with dns check — should return 422."""
     resp = client.post("/v1/scan_ip", json={"targets": ["44.228.249.3"], "checks": ["dns"]})
     assert resp.status_code == 422
-    assert "dns" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert "dns" in body["detail"].lower()
+    assert body["error"] == "invalid_target"
 
 
 def test_check_ip_ssl(client):
@@ -712,7 +722,9 @@ def test_check_ports_blocked_target(client):
     """Port scan of blocked target (127.0.0.1) — SSRF protection should return 400."""
     resp = client.post("/v1/check/ports", json={"target": "127.0.0.1"})
     assert resp.status_code == 400
-    assert "blocked" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert "blocked" in body["detail"].lower()
+    assert body["error"] == "blocked_target"
 
 
 # --- CVE scanner tests ---
@@ -793,7 +805,9 @@ def test_check_cve_blocked_target(client):
     """CVE scan of blocked target (127.0.0.1) — SSRF protection should return 400."""
     resp = client.post("/v1/check/cve", json={"target": "127.0.0.1"})
     assert resp.status_code == 400
-    assert "blocked" in resp.json()["detail"].lower()
+    body = resp.json()
+    assert "blocked" in body["detail"].lower()
+    assert body["error"] == "blocked_target"
 
 
 # ---------------------------------------------------------------------------

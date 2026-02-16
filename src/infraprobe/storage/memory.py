@@ -13,6 +13,7 @@ class MemoryJobStore:
         self._ttl_seconds = ttl_seconds
         self._cleanup_interval = cleanup_interval
         self._cleanup_task: asyncio.Task | None = None
+        self._lock = asyncio.Lock()
 
     async def create(self, job_id: str, request: ScanRequest) -> Job:
         now = datetime.now(UTC)
@@ -23,51 +24,57 @@ class MemoryJobStore:
             updated_at=now,
             request=request,
         )
-        self._jobs[job_id] = job
+        async with self._lock:
+            self._jobs[job_id] = job
         return job
 
     async def get(self, job_id: str) -> Job | None:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return None
-        if self._is_expired(job):
-            del self._jobs[job_id]
-            return None
-        return job
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            if self._is_expired(job):
+                del self._jobs[job_id]
+                return None
+            return job
 
     async def update_status(self, job_id: str, status: JobStatus) -> None:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        job.status = status
-        job.updated_at = datetime.now(UTC)
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job.status = status
+            job.updated_at = datetime.now(UTC)
 
     async def complete(self, job_id: str, result: ScanResponse) -> None:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        job.status = JobStatus.COMPLETED
-        job.result = result
-        job.updated_at = datetime.now(UTC)
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job.status = JobStatus.COMPLETED
+            job.result = result
+            job.updated_at = datetime.now(UTC)
 
     async def fail(self, job_id: str, error: str) -> None:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        job.status = JobStatus.FAILED
-        job.error = error
-        job.updated_at = datetime.now(UTC)
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job.status = JobStatus.FAILED
+            job.error = error
+            job.updated_at = datetime.now(UTC)
 
     async def update_webhook_status(self, job_id: str, status: str, delivered_at: datetime | None) -> None:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        job.webhook_status = status
-        job.webhook_delivered_at = delivered_at
-        job.updated_at = datetime.now(UTC)
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return
+            job.webhook_status = status
+            job.webhook_delivered_at = delivered_at
+            job.updated_at = datetime.now(UTC)
 
     def _is_expired(self, job: Job) -> bool:
-        age = (datetime.now(UTC) - job.created_at).total_seconds()
+        age = (datetime.now(UTC) - job.updated_at).total_seconds()
         return age > self._ttl_seconds
 
     def start_cleanup_loop(self) -> asyncio.Task:
@@ -82,8 +89,12 @@ class MemoryJobStore:
     async def _cleanup_loop(self) -> None:
         while True:
             await asyncio.sleep(self._cleanup_interval)
-            expired = [jid for jid, job in self._jobs.items() if self._is_expired(job)]
-            for jid in expired:
-                del self._jobs[jid]
-            if expired:
-                logger.info("cleaned up expired jobs", extra={"count": len(expired)})
+            try:
+                async with self._lock:
+                    expired = [jid for jid, job in self._jobs.items() if self._is_expired(job)]
+                    for jid in expired:
+                        del self._jobs[jid]
+                if expired:
+                    logger.info("cleaned up expired jobs", extra={"count": len(expired)})
+            except Exception:
+                logger.exception("error in job cleanup loop")

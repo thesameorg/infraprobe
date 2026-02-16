@@ -10,7 +10,7 @@ import httpx
 import nmap
 
 from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, validate_target
-from infraprobe.config import settings
+from infraprobe.config import nmap_semaphore, settings
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
 from infraprobe.target import parse_target
 
@@ -181,7 +181,8 @@ async def scan(target: str, timeout: float = 30.0) -> CheckResult:
         nmap_host_timeout = max(3, int(nmap_budget - 1))
         nmap_args = f"-sT -sV -T4 -Pn --top-ports 20 --host-timeout {nmap_host_timeout}s"
 
-        services = await asyncio.to_thread(_run_nmap_version, nmap_host, nmap_args)
+        async with nmap_semaphore():
+            services = await asyncio.to_thread(_run_nmap_version, nmap_host, nmap_args)
 
         if not services:
             return CheckResult(
