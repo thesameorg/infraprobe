@@ -66,8 +66,11 @@ src/infraprobe/
     ├── ssl.py          # SSL/TLS certificate and cipher check
     ├── dns.py          # DNS security records check
     ├── tech.py         # Technology detection (lightweight)
-    ├── blacklist.py    # Domain blacklist check
+    ├── blacklist.py    # DNSBL blacklist check (light: 2 zones, deep: 15 zones)
     ├── web.py          # Web security (CORS, exposed paths, mixed content, robots.txt, security.txt)
+    ├── whois_scanner.py # WHOIS domain registration and expiry
+    ├── ports.py        # Port scanning (light: top 20, deep: top 1000 + version detection)
+    ├── cve.py          # CVE vulnerability scanning (nmap + NVD API)
     └── deep/
         ├── ssl.py      # Deep SSL/TLS scan (SSLyze)
         ├── dns.py      # Deep DNS scan (checkdmarc)
@@ -173,7 +176,7 @@ Finding
 └── details: dict[str, Any]
 ```
 
-Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, tech_deep, blacklist, web).
+Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, tech_deep, blacklist, blacklist_deep, web, whois, ports, ports_deep, cve).
 
 `POST /v1/scan` uses `ScanRequest` → `ScanResponse`. `POST /v1/check/{type}` and `POST /v1/check_deep/{type}` use `SingleCheckRequest` → `TargetResult`.
 
@@ -291,6 +294,8 @@ Local dev: `docker-compose.yaml` mounts source as volume, enables `--reload`, ma
 **Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `tech_deep`, `blacklist`, `blacklist_deep`, `web`, `whois`, `ports`, `ports_deep`, `cve` — all registered and accessible via both bundle and individual endpoints. `web`, `ports`, `ports_deep`, and `cve` are opt-in (not in default checks).
 
 **Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
+
+**User-facing docs:** `docs/guide/` contains API consumer documentation — check descriptions, endpoint examples, output formats, and troubleshooting.
 
 ---
 

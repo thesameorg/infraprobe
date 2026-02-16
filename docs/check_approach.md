@@ -1,7 +1,7 @@
 # Scanner Development Guide
 
 Rules and contracts for implementing scanners. All scanner code must follow this document.
-Referenced from `CLAUDE.md`.
+Referenced from `CLAUDE.md`. For user-facing check descriptions, see `docs/guide/checks/`.
 
 ---
 
