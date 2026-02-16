@@ -1,8 +1,9 @@
-"""Tests for output format support (JSON default + SARIF + CSV)."""
+"""Tests for output format support (JSON default + SARIF + CSV) and GET report endpoint."""
 
 import csv
 import io
 import json
+from datetime import UTC, datetime
 
 import pytest
 
@@ -12,6 +13,9 @@ from infraprobe.models import (
     CheckResult,
     CheckType,
     Finding,
+    Job,
+    JobStatus,
+    ScanRequest,
     ScanResponse,
     Severity,
     SeveritySummary,
@@ -362,3 +366,96 @@ class TestCsvFormatQueryParam:
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("application/json")
         assert "detail" in resp.json()
+
+
+# ---------------------------------------------------------------------------
+# GET /v1/scan/{job_id}/report — unit tests (seed jobs directly in store)
+# ---------------------------------------------------------------------------
+
+
+def _completed_job(job_id: str = "test-job") -> Job:
+    finding = Finding(severity=Severity.HIGH, title="Missing HSTS", description="No HSTS header")
+    tr = _target_result("example.com", {"headers": _check_result(CheckType.HEADERS, [finding])})
+    now = datetime.now(UTC)
+    return Job(
+        job_id=job_id,
+        status=JobStatus.COMPLETED,
+        created_at=now,
+        updated_at=now,
+        request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+        result=ScanResponse(results=[tr]),
+    )
+
+
+class TestGetScanReport:
+    """Test GET /v1/scan/{job_id}/report endpoint."""
+
+    def test_report_not_found(self, client):
+        resp = client.get("/v1/scan/nonexistent/report")
+        assert resp.status_code == 404
+
+    def test_report_pending_job_returns_409(self, client):
+        store = client.app.state.job_store
+        now = datetime.now(UTC)
+        store._jobs["pending-job"] = Job(
+            job_id="pending-job",
+            status=JobStatus.RUNNING,
+            created_at=now,
+            updated_at=now,
+            request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+        )
+        resp = client.get("/v1/scan/pending-job/report")
+        assert resp.status_code == 409
+        assert "running" in resp.json()["detail"]
+
+    def test_report_json(self, client):
+        store = client.app.state.job_store
+        job = _completed_job("json-job")
+        store._jobs[job.job_id] = job
+
+        resp = client.get("/v1/scan/json-job/report")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("application/json")
+        data = resp.json()
+        assert "results" in data
+        assert data["results"][0]["target"] == "example.com"
+
+    def test_report_sarif(self, client):
+        store = client.app.state.job_store
+        job = _completed_job("sarif-job")
+        store._jobs[job.job_id] = job
+
+        resp = client.get("/v1/scan/sarif-job/report?format=sarif")
+        assert resp.status_code == 200
+        assert "sarif" in resp.headers["content-type"]
+        sarif = resp.json()
+        assert sarif["version"] == "2.1.0"
+        assert len(sarif["runs"][0]["results"]) == 1
+
+    def test_report_csv(self, client):
+        store = client.app.state.job_store
+        job = _completed_job("csv-job")
+        store._jobs[job.job_id] = job
+
+        resp = client.get("/v1/scan/csv-job/report?format=csv")
+        assert resp.status_code == 200
+        assert resp.headers["content-type"].startswith("text/csv")
+        rows = _parse_csv(resp.text)
+        assert rows[0] == ["target", "check", "severity", "title", "description", "details", "score"]
+        assert len(rows) == 2
+        assert rows[1][0] == "example.com"
+
+    def test_report_failed_job_returns_409(self, client):
+        store = client.app.state.job_store
+        now = datetime.now(UTC)
+        store._jobs["failed-job"] = Job(
+            job_id="failed-job",
+            status=JobStatus.FAILED,
+            created_at=now,
+            updated_at=now,
+            request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+            error="Something broke",
+        )
+        resp = client.get("/v1/scan/failed-job/report")
+        assert resp.status_code == 409
+        assert "failed" in resp.json()["detail"]

@@ -340,3 +340,18 @@ async def get_scan_job(job_id: str, req: Request) -> Job | JSONResponse:
     if job is None:
         return JSONResponse(status_code=404, content={"detail": "Job not found"})
     return job
+
+
+@router.get("/scan/{job_id}/report", response_model=None)
+async def get_scan_report(
+    job_id: str,
+    req: Request,
+    fmt: FormatParam = OutputFormat.JSON,
+):
+    store: JobStore = req.app.state.job_store
+    job = await store.get(job_id)
+    if job is None:
+        return JSONResponse(status_code=404, content={"detail": "Job not found"})
+    if job.status != JobStatus.COMPLETED or job.result is None:
+        return JSONResponse(status_code=409, content={"detail": f"Job is {job.status}", "job_id": job_id})
+    return _format_scan_response(job.result, fmt)
