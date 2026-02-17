@@ -41,6 +41,22 @@ _CMS_FINDINGS = frozenset({"WordPress", "Joomla", "Drupal", "Magento", "PrestaSh
 
 def _analyze_response(adapted: _ResponseAdapter) -> dict:
     """Run wappalyzer analysis on a pre-fetched response (called via asyncio.to_thread)."""
+    # Stub wappalyzer.browser before import — the browser subpackage (Selenium-based)
+    # is stripped from the Docker image to save ~60MB, but wappalyzer's __init__.py
+    # unconditionally imports from it.  We only use wappalyzer.core (HTTP-only analysis).
+    import sys
+    import types
+
+    if "wappalyzer.browser" not in sys.modules:
+        _stub = types.ModuleType("wappalyzer.browser")
+        _stub.analyzer = types.ModuleType("wappalyzer.browser.analyzer")  # type: ignore[attr-defined]
+        _stub.analyzer.DriverPool = None  # type: ignore[attr-defined]
+        _stub.analyzer.cookie_to_cookies = None  # type: ignore[attr-defined]
+        _stub.analyzer.process_url = None  # type: ignore[attr-defined]
+        _stub.analyzer.merge_technologies = None  # type: ignore[attr-defined]
+        sys.modules["wappalyzer.browser"] = _stub
+        sys.modules["wappalyzer.browser.analyzer"] = _stub.analyzer  # type: ignore[attr-defined]
+
     from wappalyzer.core.analyzer import analyze_from_response
     from wappalyzer.core.utils import create_result
 

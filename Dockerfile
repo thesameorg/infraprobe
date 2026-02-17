@@ -10,6 +10,9 @@ COPY . .
 RUN uv sync --frozen --no-dev
 
 # Strip build artifacts: __pycache__, .pyc, test suites, selenium (unused wappalyzer.browser dep)
+# WARNING: stripping wappalyzer/browser requires a sys.modules stub in scanners/deep/tech.py
+# because wappalyzer's __init__.py unconditionally imports it. If you strip other subpackages
+# that are imported at package init time, add a similar stub. See docs/check_approach.md § Debugging.
 RUN find /app/.venv -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null; \
     find /app/.venv -name "*.pyc" -delete 2>/dev/null; \
     rm -rf /app/.venv/lib/python3.12/site-packages/selenium \
