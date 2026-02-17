@@ -58,7 +58,7 @@ jobs:
           service: infraprobe
           image: ${{ env.IMAGE }}:${{ github.sha }}
           region: ${{ vars.GCP_REGION }}
-          flags: --concurrency=10 --memory=1Gi --cpu=2
+          flags: --concurrency=5 --memory=1Gi --cpu=2
           env_vars: |
             INFRAPROBE_RAPIDAPI_PROXY_SECRET=${{ secrets.INFRAPROBE_RAPIDAPI_PROXY_SECRET }}
             INFRAPROBE_NVD_API_KEY=${{ secrets.INFRAPROBE_NVD_API_KEY }}

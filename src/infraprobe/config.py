@@ -18,7 +18,8 @@ class Settings(BaseSettings):
     job_cleanup_interval: int = Field(default=300, gt=0)
     webhook_timeout: float = Field(default=5.0, gt=0)
     webhook_max_retries: int = Field(default=3, ge=0)
-    nmap_max_concurrent: int = Field(default=3, ge=1, le=10)
+    max_concurrent_scans: int = Field(default=5, ge=1, le=50)
+    nmap_max_concurrent: int = Field(default=6, ge=1, le=20)
 
     model_config = {"env_prefix": "INFRAPROBE_", "env_file": ".env", "extra": "ignore"}
 
@@ -32,6 +33,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+@functools.cache
+def scan_semaphore() -> asyncio.Semaphore:
+    """Return a singleton semaphore limiting concurrent scan operations."""
+    return asyncio.Semaphore(settings.max_concurrent_scans)
 
 
 @functools.cache

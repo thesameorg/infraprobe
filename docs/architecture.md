@@ -54,7 +54,7 @@ Client
 src/infraprobe/
 ├── __init__.py
 ├── app.py              # FastAPI instance, scanner registration, exception handlers, /health, /health/ready, /metrics
-├── config.py           # pydantic-settings (INFRAPROBE_ env prefix), nmap_semaphore
+├── config.py           # pydantic-settings (INFRAPROBE_ env prefix), scan_semaphore, nmap_semaphore
 ├── models.py           # Pydantic models + enums (Severity, CheckType, ErrorResponse)
 ├── metrics.py          # Prometheus metrics (request count/duration, scanner duration, active scans)
 ├── blocklist.py        # SSRF protection: block private/reserved IPs (urllib.parse-based)
@@ -90,7 +90,7 @@ Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for d
 
 Creates the FastAPI instance. Registers scanners into the module-level registry in `api/scan.py` via `register_scanner(CheckType, scan_fn)`. Mounts the scan router under `/v1`. Exposes `GET /health` (liveness), `GET /health/ready` (readiness — checks cleanup task is alive), and `GET /metrics` (Prometheus). Infrastructure paths (`/health`, `/health/ready`, `/metrics`) are excluded from logging and auth middleware.
 
-Global exception handlers return consistent `{"error": "<code>", "detail": "<message>"}` shapes: `BlockedTargetError` → 400 `blocked_target`, `InvalidTargetError` → 422 `invalid_target`, unhandled `Exception` → 500 `internal_error`.
+Global exception handlers return consistent `{"error": "<code>", "detail": "<message>"}` shapes: `BlockedTargetError` → 400 `blocked_target`, `CapacityExceededError` → 429 `too_many_requests`, `InvalidTargetError` → 422 `invalid_target`, unhandled `Exception` → 500 `internal_error`.
 
 Optional RapidAPI proxy-secret middleware is enabled when `INFRAPROBE_RAPIDAPI_PROXY_SECRET` is set.
 
@@ -145,7 +145,8 @@ SSRF protection layer. Called before any scanner runs.
 | `port` | `8080` | `INFRAPROBE_PORT` | `ge=1, le=65535` |
 | `scanner_timeout` | `10.0` | `INFRAPROBE_SCANNER_TIMEOUT` | `gt=0` |
 | `deep_scanner_timeout` | `30.0` | `INFRAPROBE_DEEP_SCANNER_TIMEOUT` | `gt=0` |
-| `nmap_max_concurrent` | `3` | `INFRAPROBE_NMAP_MAX_CONCURRENT` | `ge=1, le=10` |
+| `max_concurrent_scans` | `5` | `INFRAPROBE_MAX_CONCURRENT_SCANS` | `ge=1, le=50` |
+| `nmap_max_concurrent` | `6` | `INFRAPROBE_NMAP_MAX_CONCURRENT` | `ge=1, le=20` |
 | `job_ttl_seconds` | `3600` | `INFRAPROBE_JOB_TTL_SECONDS` | `gt=0` |
 | `job_cleanup_interval` | `300` | `INFRAPROBE_JOB_CLEANUP_INTERVAL` | `gt=0` |
 | `webhook_timeout` | `5.0` | `INFRAPROBE_WEBHOOK_TIMEOUT` | `gt=0` |
@@ -205,7 +206,9 @@ _scan_target(A, ...):
 
 Max concurrency for bundle: 10 targets x 8 check types = 80 tasks. Individual check endpoints run 1 task. All I/O-bound (HTTP, DNS, TLS handshakes).
 
-**Nmap semaphore:** Port and CVE scanners spawn nmap subprocesses via `asyncio.to_thread`. A shared `asyncio.Semaphore` (from `config.nmap_semaphore()`, default 3) limits concurrent nmap processes to prevent OOM under load.
+**Scan semaphore:** A global `asyncio.Semaphore` (from `config.scan_semaphore()`, default 5) limits concurrent `_scan_target()` calls to prevent event loop starvation under load. Multi-target scans acquire/release slots per target independently.
+
+**Nmap semaphore:** Port and CVE scanners spawn nmap subprocesses via `asyncio.to_thread`. A shared `asyncio.Semaphore` (from `config.nmap_semaphore()`, default 6) limits concurrent nmap processes to prevent OOM under load. Sync endpoints return 429 `too_many_requests` when all nmap slots are in use (backpressure); async endpoints accept and queue.
 
 Total latency per request ≈ `max(scanner_timeout)` + scheduling overhead, not the sum.
 
@@ -233,6 +236,7 @@ All error responses use a consistent shape: `{"error": "<code>", "detail": "<mes
 | Blocked target | Whole request | 400 | `blocked_target` | Global exception handler |
 | Invalid target | Whole request | 422 | `invalid_target` | Global exception handler |
 | Auth rejected | Whole request | 403 | `forbidden` | RapidAPI middleware |
+| Capacity exceeded | Whole request | 429 | `too_many_requests` | Global exception handler |
 | Job not found | Single job | 404 | `not_found` | Inline JSONResponse |
 | Job not ready | Single job | 409 | `job_not_ready` | Inline JSONResponse |
 | Shutting down | Async scan | 503 | `shutting_down` | Graceful shutdown flag |
@@ -307,7 +311,8 @@ Production robustness measures implemented:
 - **Input limits:** `TargetStr` type enforces `max_length=2048` on all target strings and webhook URLs to prevent DoS via oversized payloads.
 - **Consistent error shapes:** All error responses use `{"error": "<code>", "detail": "<message>"}`. Catch-all `Exception` handler returns 500 `internal_error`.
 - **Job store hardening:** `asyncio.Lock` protects all `_jobs` dict access. Cleanup loop wrapped in `try/except` with `logger.exception()`. TTL expiration based on `updated_at` (not `created_at`) so active jobs aren't prematurely evicted.
-- **Nmap concurrency:** `asyncio.Semaphore` (configurable, default 3) limits concurrent nmap processes in port and CVE scanners to prevent OOM.
+- **Scan concurrency:** `asyncio.Semaphore` (configurable, default 5) limits concurrent `_scan_target()` calls to prevent event loop starvation under load.
+- **Nmap concurrency:** `asyncio.Semaphore` (configurable, default 6) limits concurrent nmap processes in port and CVE scanners to prevent OOM. Sync endpoints return 429 when all slots are in use (backpressure).
 - **Readiness probe:** `GET /health/ready` checks cleanup task is alive, returns 503 if not. Separate from liveness (`GET /health`).
 - **Graceful shutdown:** Lifespan shutdown drains in-flight background tasks (25s timeout) before stopping cleanup loop. New async scan requests during shutdown return 503.
 - **Prometheus metrics:** `GET /metrics` exposes request count/duration, scanner duration, and active scan gauges. Compatible with Cloud Run metrics scraping and any Prometheus-compatible collector.

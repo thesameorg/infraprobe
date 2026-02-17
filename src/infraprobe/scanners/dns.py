@@ -12,9 +12,15 @@ from infraprobe.target import parse_target
 _RECORD_TYPES = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "CAA"]
 
 
-async def _resolve(resolver: dns.asyncresolver.Resolver, domain: str, rdtype: str) -> list[str]:
-    """Resolve a single record type, returning list of string representations."""
+async def _resolve(domain: str, rdtype: str, timeout: float) -> list[str]:
+    """Resolve a single record type, returning list of string representations.
+
+    Each call creates its own Resolver with an independent lifetime budget,
+    so one slow query (e.g. large TXT) cannot exhaust the budget for others.
+    """
     try:
+        resolver = dns.asyncresolver.Resolver()
+        resolver.lifetime = timeout
         answer = await resolver.resolve(domain, rdtype, raise_on_no_answer=False)
         return [rdata.to_text() for rdata in answer]
     except (dns.asyncresolver.NXDOMAIN, dns.asyncresolver.NoAnswer, dns.resolver.NoNameservers):
@@ -132,23 +138,13 @@ async def scan(target: str, timeout: float = 10.0) -> CheckResult:
     domain = parse_target(target).host
 
     try:
-        resolver = dns.asyncresolver.Resolver()
-        resolver.lifetime = timeout
-        # NOTE: resolver.lifetime is a shared budget across ALL queries on this
-        # instance.  When many queries run in parallel, fast ones consume part of
-        # the budget and slow queries (e.g. TXT for domains with many records)
-        # may hit LifetimeTimeout even though the wall-clock time per query is
-        # reasonable.  Some consumer-grade DNS resolvers also struggle with large
-        # TXT responses (UDP truncation → TCP retry loop), which amplifies this.
-        # A future improvement could give each query its own Resolver instance or
-        # fall back to a public DNS server (8.8.8.8 / 1.1.1.1) on timeout.
-
-        # Resolve all standard record types in parallel
-        tasks = {rdtype: _resolve(resolver, domain, rdtype) for rdtype in _RECORD_TYPES}
+        # Resolve all standard record types in parallel — each _resolve() call
+        # creates its own Resolver with an independent lifetime budget.
+        tasks = {rdtype: _resolve(domain, rdtype, timeout) for rdtype in _RECORD_TYPES}
         results = dict(zip(tasks.keys(), await asyncio.gather(*tasks.values()), strict=True))
 
         # Also resolve _dmarc subdomain
-        dmarc_txt = await _resolve(resolver, f"_dmarc.{domain}", "TXT")
+        dmarc_txt = await _resolve(f"_dmarc.{domain}", "TXT", timeout)
 
     except Exception as exc:
         return CheckResult(check=CheckType.DNS, error=f"DNS resolution failed for {domain}: {exc}")

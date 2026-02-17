@@ -39,9 +39,14 @@ class InvalidTargetError(Exception):
     pass
 
 
+class CapacityExceededError(Exception):
+    """Raised when server capacity (e.g. nmap slots) is exhausted."""
+
+
 # Re-export so existing ``from infraprobe.blocklist import ...`` works.
 __all__ = [
     "BlockedTargetError",
+    "CapacityExceededError",
     "InvalidTargetError",
     "ScanContext",
     "Target",

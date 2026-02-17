@@ -96,7 +96,7 @@ What you don't need to change:
 
 **Request takes too long:** Check `duration_ms` in `TargetResult`. All scanners run in parallel, so total time ≈ slowest scanner. Validate with `INFRAPROBE_SCANNER_TIMEOUT=2`.
 
-**DNS scanner times out on certain domains:** dnspython's `resolver.lifetime` is a shared budget across all queries on the same `Resolver` instance. Domains with many TXT records (e.g. `google.com`) can exhaust the budget when the system DNS resolver struggles with large responses (UDP truncation → TCP fallback retry loop). Public DNS (8.8.8.8) handles these fine. See comment in `scanners/dns.py` for details and potential fixes.
+**DNS scanner:** Each DNS query creates its own `Resolver` instance with an independent `lifetime` budget, so one slow query (e.g. large TXT response) cannot exhaust the timeout for others. All queries still run in parallel via `asyncio.gather`.
 
 **`ModuleNotFoundError` for a third-party submodule in Docker:** The Dockerfile strips heavy/unused dependencies (e.g. `selenium`, `wappalyzer/browser`) to shrink the image. If a library's `__init__.py` unconditionally imports the stripped submodule, any import of that library — even a different submodule — will fail. Fix: stub the stripped module in `sys.modules` before importing. See `scanners/deep/tech.py` for the `wappalyzer.browser` stub pattern.
 

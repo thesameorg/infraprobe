@@ -13,7 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from infraprobe import __version__
 from infraprobe.api.scan import drain_background_tasks, register_scanner, reset_shutdown_flag
 from infraprobe.api.scan import router as scan_router
-from infraprobe.blocklist import BlockedTargetError, InvalidTargetError
+from infraprobe.blocklist import BlockedTargetError, CapacityExceededError, InvalidTargetError
 from infraprobe.config import settings
 from infraprobe.logging import request_ctx, setup_logging
 from infraprobe.metrics import REQUEST_COUNT, REQUEST_DURATION
@@ -140,6 +140,12 @@ if settings.rapidapi_proxy_secret:
 async def _blocked_target_handler(_request: Request, exc: BlockedTargetError) -> JSONResponse:
     logger.warning("blocked target", extra={"error": str(exc)})
     return JSONResponse(status_code=400, content={"error": "blocked_target", "detail": str(exc)})
+
+
+@app.exception_handler(CapacityExceededError)
+async def _capacity_exceeded_handler(_request: Request, exc: CapacityExceededError) -> JSONResponse:
+    logger.warning("capacity exceeded", extra={"error": str(exc)})
+    return JSONResponse(status_code=429, content={"error": "too_many_requests", "detail": str(exc)})
 
 
 @app.exception_handler(InvalidTargetError)

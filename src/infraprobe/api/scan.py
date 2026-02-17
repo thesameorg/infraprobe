@@ -9,8 +9,15 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 
-from infraprobe.blocklist import BlockedTargetError, InvalidTargetError, validate_domain, validate_ip, validate_target
-from infraprobe.config import settings
+from infraprobe.blocklist import (
+    BlockedTargetError,
+    CapacityExceededError,
+    InvalidTargetError,
+    validate_domain,
+    validate_ip,
+    validate_target,
+)
+from infraprobe.config import nmap_semaphore, scan_semaphore, settings
 from infraprobe.formatters.csv import scan_response_to_csv, target_result_to_csv
 from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
 from infraprobe.metrics import ACTIVE_SCANS, SCANNER_DURATION
@@ -128,37 +135,45 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
 
 
 _DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep", "blacklist_deep", "ports_deep", "cve"})
+_NMAP_CHECKS = frozenset({CheckType.PORTS, CheckType.PORTS_DEEP, CheckType.CVE})
+
+
+def _check_nmap_backpressure(checks: list[CheckType]) -> None:
+    """Raise CapacityExceededError if nmap slots are exhausted and request needs nmap."""
+    if _NMAP_CHECKS.intersection(checks) and nmap_semaphore()._value == 0:
+        raise CapacityExceededError("All nmap slots are in use. Retry later or use the async endpoint.")
 
 
 async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResult:
-    ACTIVE_SCANS.inc()
-    start = time.monotonic()
-    target_str = str(ctx)
+    async with scan_semaphore():
+        ACTIVE_SCANS.inc()
+        start = time.monotonic()
+        target_str = str(ctx)
 
-    try:
-        tasks = [
-            _run_scanner(
-                ct,
-                target_str,
-                settings.deep_scanner_timeout if ct in _DEEP_CHECKS else settings.scanner_timeout,
+        try:
+            tasks = [
+                _run_scanner(
+                    ct,
+                    target_str,
+                    settings.deep_scanner_timeout if ct in _DEEP_CHECKS else settings.scanner_timeout,
+                )
+                for ct in checks
+            ]
+            results: list[CheckResult] = await asyncio.gather(*tasks)
+
+            results_map: dict[str, CheckResult] = {}
+            for r in results:
+                results_map[r.check] = r
+
+            duration_ms = int((time.monotonic() - start) * 1000)
+
+            return TargetResult(
+                target=target_str,
+                results=results_map,
+                duration_ms=duration_ms,
             )
-            for ct in checks
-        ]
-        results: list[CheckResult] = await asyncio.gather(*tasks)
-
-        results_map: dict[str, CheckResult] = {}
-        for r in results:
-            results_map[r.check] = r
-
-        duration_ms = int((time.monotonic() - start) * 1000)
-
-        return TargetResult(
-            target=target_str,
-            results=results_map,
-            duration_ms=duration_ms,
-        )
-    finally:
-        ACTIVE_SCANS.dec()
+        finally:
+            ACTIVE_SCANS.dec()
 
 
 _SARIF_MEDIA_TYPE = "application/sarif+json"
@@ -192,6 +207,7 @@ async def _run_scan_with_validator(
     validator: Callable[[str], ScanContext],
 ) -> ScanResponse:
     """Shared orchestration for all scan endpoints (generic, domain, IP)."""
+    _check_nmap_backpressure(checks)
     contexts = [validator(raw) for raw in targets]
     check_names = [str(c) for c in checks]
     logger.info(
@@ -276,6 +292,7 @@ async def _run_single_check(
 
 
 async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
+    _check_nmap_backpressure([check_type])
     return await _run_single_check(check_type, request.target, validate_target)
 
 
