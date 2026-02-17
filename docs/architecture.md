@@ -123,7 +123,7 @@ Scanner function signature: `async def scan(target: str, timeout: float) -> Chec
 
 ### Shared HTTP Client (`http.py`)
 
-Provides `scanner_client(timeout)` and `fetch_with_fallback(target, client)` used by all HTTP-based scanners (`headers_drheader`, `tech`, `web`). Centralises the HTTPS-first with HTTP-fallback pattern, TLS verification disabled (scanners inspect certs separately), and short connect timeouts (3 s cap).
+Provides `scanner_client(timeout)` and `fetch_with_fallback(target, client)` used by all HTTP-based scanners (`headers_drheader`, `tech`, `web`). Centralises the HTTPS-first with HTTP-fallback pattern, TLS verification disabled (scanners inspect certs separately), and short connect timeouts (3 s cap). `scanner_client` accepts `follow_redirects` (default `True`); the headers scanner uses `follow_redirects=False` to analyze the target's own response headers rather than a redirect destination's.
 
 ### Blocklist (`blocklist.py`)
 

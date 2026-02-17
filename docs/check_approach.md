@@ -27,7 +27,7 @@ The `target` string is the normalized host (or host:port). A `ScanContext` (from
 
 4. **Findings = problems + positive confirmations.** Report issues that need attention (CRITICAL through LOW), and add `Severity.INFO` findings for things configured correctly (e.g. "TLS 1.3 supported", "DNSSEC enabled", "DMARC policy is reject"). This lets users see what's right, not just what's wrong. Use the `raw` dict for neutral/diagnostic data (response headers, cert details, DNS records).
 
-5. **Stateless.** No module-level state, no connection pools, no caches. Receive target + timeout, return result. For HTTP-based scanners, use the shared client from `http.py` (`scanner_client` + `fetch_with_fallback`) instead of creating ad-hoc httpx clients.
+5. **Stateless.** No module-level state, no connection pools, no caches. Receive target + timeout, return result. For HTTP-based scanners, use the shared client from `http.py` (`scanner_client` + `fetch_with_fallback`) instead of creating ad-hoc httpx clients. Use `scanner_client(timeout, follow_redirects=False)` when the scanner needs to analyze the target's own response (e.g. headers scanner), or leave the default (`True`) when the scanner needs final-page content (e.g. tech detection).
 
 6. **Deterministic check type.** Always return `CheckResult(check=CheckType.YOUR_TYPE, ...)`. The check field must match the scanner's registered type.
 
