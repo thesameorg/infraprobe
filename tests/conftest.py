@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from infraprobe.app import app
+from infraprobe.config import settings
 
 
 def pytest_addoption(parser):
@@ -18,5 +19,6 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+    headers = {"x-rapidapi-proxy-secret": settings.rapidapi_proxy_secret}
+    with TestClient(app, headers=headers) as c:
         yield c

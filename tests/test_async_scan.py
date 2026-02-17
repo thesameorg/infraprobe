@@ -3,14 +3,6 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from infraprobe.app import app
-
-
-@pytest.fixture
-def client():
-    with TestClient(app) as c:
-        yield c
-
 
 def test_async_scan_submit_returns_202(client: TestClient):
     resp = client.post("/v1/scan/async", json={"targets": ["example.com"], "checks": ["headers"]})

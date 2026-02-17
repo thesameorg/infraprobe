@@ -7,14 +7,6 @@ import pytest
 from fastapi.testclient import TestClient
 from pytest_httpserver import HTTPServer
 
-from infraprobe.app import app
-
-
-@pytest.fixture
-def client():
-    with TestClient(app) as c:
-        yield c
-
 
 def _poll_until_done(client: TestClient, job_id: str, timeout: float = 30) -> dict:
     deadline = time.monotonic() + timeout

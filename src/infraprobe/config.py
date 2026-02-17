@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     port: int = Field(default=8080, ge=1, le=65535)
     scanner_timeout: float = Field(default=10.0, gt=0)
     deep_scanner_timeout: float = Field(default=30.0, gt=0)
-    rapidapi_proxy_secret: str | None = None
-    nvd_api_key: str | None = None
+    rapidapi_proxy_secret: str = Field(min_length=1)
+    nvd_api_key: str = Field(min_length=1)
     job_ttl_seconds: int = Field(default=3600, gt=0)
     job_cleanup_interval: int = Field(default=300, gt=0)
     webhook_timeout: float = Field(default=5.0, gt=0)

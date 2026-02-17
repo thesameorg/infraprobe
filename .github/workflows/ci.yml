@@ -19,6 +19,9 @@ jobs:
       - run: uv sync --frozen
       - run: uv run pip-audit
       - run: uv run pytest
+        env:
+          INFRAPROBE_RAPIDAPI_PROXY_SECRET: test
+          INFRAPROBE_NVD_API_KEY: test
 
   deploy:
     needs: test
