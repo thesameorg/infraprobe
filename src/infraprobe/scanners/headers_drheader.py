@@ -37,7 +37,7 @@ def _build_details(item: object) -> dict:
 
 async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     try:
-        async with scanner_client(timeout, auth=auth) as client:
+        async with scanner_client(timeout, follow_redirects=False, auth=auth) as client:
             _, resp = await fetch_with_fallback(target, client)
     except httpx.HTTPError as exc:
         return CheckResult(check=CheckType.HEADERS, error=f"Cannot connect to {target}: {exc}")
@@ -72,6 +72,24 @@ async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     url = str(resp.url)
     headers_lower = {k.lower(): v for k, v in resp.headers.items()}
 
+    # Redirect detection
+    is_redirect = resp.status_code in (301, 302, 303, 307, 308)
+    redirect_location = headers_lower.get("location", "") if is_redirect else ""
+    if is_redirect and redirect_location:
+        is_downgrade = url.startswith("https://") and redirect_location.startswith("http://")
+        findings.append(
+            Finding(
+                severity=Severity.HIGH if is_downgrade else Severity.INFO,
+                title="Redirect detected" + (" (HTTPS to HTTP downgrade)" if is_downgrade else ""),
+                description=(
+                    f"The target responds with HTTP {resp.status_code} redirecting to {redirect_location}. "
+                    "Headers analyzed are from this redirect response, not the destination. "
+                    "Scan the destination URL separately for its security headers."
+                ),
+                details={"status_code": resp.status_code, "location": redirect_location},
+            )
+        )
+
     # HTTPS check
     if url.startswith("http://"):
         findings.append(
@@ -101,5 +119,7 @@ async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
         "status_code": resp.status_code,
         "headers": dict(resp.headers),
     }
+    if is_redirect and redirect_location:
+        raw["redirect_location"] = redirect_location
 
     return CheckResult(check=CheckType.HEADERS, findings=findings, raw=raw)
