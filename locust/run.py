@@ -58,6 +58,7 @@ SCENARIOS = {
     "AsyncQueueStress": {"users": 20, "rate": 5, "duration": "3m"},
     "FailureCascade": {"users": 20, "rate": 3, "duration": "3m"},
     "Soak": {"users": 10, "rate": 2, "duration": "30m"},
+    "AuthSmoke": {"users": 2, "rate": 1, "duration": "30s"},
 }
 
 
@@ -65,6 +66,12 @@ def load_secret() -> str:
     # Check env var first
     if secret := os.environ.get("RAPIDAPI_SECRET", ""):
         return secret
+    # Check .envs/rapidapi_proxy_secret.txt (project convention)
+    secret_file = ROOT / ".envs" / "rapidapi_proxy_secret.txt"
+    if secret_file.exists():
+        value = secret_file.read_text().strip()
+        if value:
+            return value
     # Parse .env file for INFRAPROBE_RAPIDAPI_PROXY_SECRET
     if DOTENV.exists():
         for line in DOTENV.read_text().splitlines():

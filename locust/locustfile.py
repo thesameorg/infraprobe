@@ -147,14 +147,23 @@ class InfraProbeUser(HttpUser):
             else:
                 resp.failure(f"HTTP {resp.status_code}")
 
-    def _check(self, check_type: str, target: str, deep: bool = False):
+    def _check(self, check_type: str, target: str, deep: bool = False, auth: dict | None = None):
         """POST /v1/check/{type} or /v1/check_deep/{type}."""
         prefix = "check_deep" if deep else "check"
+        payload: dict = {"target": target}
+        if auth:
+            payload["auth"] = auth
         self.client.post(
             f"/v1/{prefix}/{check_type}",
-            json={"target": target},
+            json=payload,
             name=f"/v1/{prefix}/{check_type}",
         )
+
+    def _auth_scan(self, payload: dict, name: str, auth: dict | None = None):
+        """POST /v1/scan with auth and response parsing."""
+        if auth:
+            payload["auth"] = auth
+        self._scan(payload, name)
 
 
 # ===================================================================
@@ -572,3 +581,75 @@ class Smoke(InfraProbeUser):
                 if resp.json().get("status") in ("completed", "failed"):
                     break
             time.sleep(2)
+
+
+# ===================================================================
+# SCENARIO 8: Auth Smoke Test
+#
+# Verify authenticated scanning works end-to-end.
+# Tests all auth types against real targets.
+#
+# Run: locust ... -u 2 -r 1 -t 30s AuthSmoke
+# ===================================================================
+
+
+_AUTH_BEARER = {"type": "bearer", "token": "test-bearer-token-for-load-test"}
+_AUTH_BASIC = {"type": "basic", "username": "testuser", "password": "testpass"}
+_AUTH_HEADER = {"type": "header", "headers": {"X-API-Key": "test-key-123"}}
+_AUTH_COOKIE = {"type": "cookie", "cookies": {"session_id": "test-session"}}
+
+
+class AuthSmoke(InfraProbeUser):
+    """Quick validation that auth payloads are accepted across all endpoint types."""
+
+    wait_time = between(1, 3)
+
+    @task
+    def scan_with_bearer(self):
+        self._auth_scan(
+            {"targets": [random_domain()], "checks": ["headers", "tech"]},
+            "/v1/scan [auth-bearer]",
+            auth=_AUTH_BEARER,
+        )
+
+    @task
+    def scan_with_basic(self):
+        self._auth_scan(
+            {"targets": [random_domain()], "checks": ["headers"]},
+            "/v1/scan [auth-basic]",
+            auth=_AUTH_BASIC,
+        )
+
+    @task
+    def scan_with_header(self):
+        self._auth_scan(
+            {"targets": [random_domain()], "checks": ["headers", "dns"]},
+            "/v1/scan [auth-header]",
+            auth=_AUTH_HEADER,
+        )
+
+    @task
+    def scan_with_cookie(self):
+        self._auth_scan(
+            {"targets": [random_domain()], "checks": ["headers"]},
+            "/v1/scan [auth-cookie]",
+            auth=_AUTH_COOKIE,
+        )
+
+    @task
+    def check_with_auth(self):
+        self._check("headers", random_domain(), auth=_AUTH_BEARER)
+
+    @task
+    def scan_mixed_auth_ignored(self):
+        """Auth with non-HTTP checks — should work fine, auth ignored."""
+        self._auth_scan(
+            {"targets": [random_domain()], "checks": ["ssl", "dns"]},
+            "/v1/scan [auth-nonhttp]",
+            auth=_AUTH_BEARER,
+        )
+
+    @task
+    def scan_no_auth_baseline(self):
+        """Baseline without auth — verify it still works."""
+        self._scan({"targets": [random_domain()]}, "/v1/scan [no-auth-baseline]")
