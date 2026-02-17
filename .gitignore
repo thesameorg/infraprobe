@@ -5,6 +5,7 @@ __pycache__/
 
 work_docs/
 .envs/
+locust/logs/
 # C extensions
 *.so
 CLAUDE.md
