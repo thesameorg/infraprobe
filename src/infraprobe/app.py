@@ -50,7 +50,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     store.stop_cleanup_loop()
 
 
-app = FastAPI(title="InfraProbe", version=__version__, lifespan=lifespan)
+app = FastAPI(
+    title="InfraProbe",
+    version=__version__,
+    lifespan=lifespan,
+    openapi_tags=[
+        {"name": "Scans", "description": "Bundle scan endpoints — run multiple checks against one or more targets."},
+        {"name": "Checks", "description": "Individual light checks — fast, single-check endpoints."},
+        {"name": "Deep Checks", "description": "Individual deep checks — slower, more thorough analysis."},
+        {"name": "Async Jobs", "description": "Asynchronous scanning with polling and webhook support."},
+        {"name": "Internal", "description": "Health probes and observability."},
+    ],
+)
 
 
 # ---------------------------------------------------------------------------
@@ -184,12 +195,12 @@ register_scanner(CheckType.CVE, cve.scan)
 app.include_router(scan_router, prefix="/v1")
 
 
-@app.get("/health")
+@app.get("/health", tags=["Internal"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/ready")
+@app.get("/health/ready", tags=["Internal"])
 async def health_ready(request: Request) -> JSONResponse:
     """Readiness probe — checks that the cleanup task is alive."""
     store: MemoryJobStore = request.app.state.job_store
@@ -199,7 +210,7 @@ async def health_ready(request: Request) -> JSONResponse:
     return JSONResponse(status_code=200, content={"status": "ready"})
 
 
-@app.get("/metrics")
+@app.get("/metrics", tags=["Internal"])
 async def metrics() -> PlainTextResponse:
     """Prometheus metrics endpoint."""
     return PlainTextResponse(generate_latest(), media_type="text/plain; version=0.0.4; charset=utf-8")

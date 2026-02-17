@@ -147,9 +147,7 @@ def _check_nmap_backpressure(checks: list[CheckType]) -> None:
         raise CapacityExceededError("All nmap slots are in use. Retry later or use the async endpoint.")
 
 
-async def _scan_target(
-    ctx: ScanContext, checks: list[CheckType], auth: AuthConfig | None = None
-) -> TargetResult:
+async def _scan_target(ctx: ScanContext, checks: list[CheckType], auth: AuthConfig | None = None) -> TargetResult:
     async with scan_semaphore():
         ACTIVE_SCANS.inc()
         start = time.monotonic()
@@ -251,7 +249,7 @@ async def _run_full_scan(request: ScanRequest) -> ScanResponse:
     return await _run_scan_with_validator(request.targets, request.checks, validate_target, request.auth)
 
 
-@router.post("/scan")
+@router.post("/scan", tags=["Scans"])
 async def scan(
     request: ScanRequest,
     fmt: FormatParam = OutputFormat.JSON,
@@ -322,9 +320,13 @@ for _ct in CheckType:
     _handler = _make_check_handler(_ct)
     if _ct.value.endswith("_deep"):
         _slug = _ct.value.removesuffix("_deep")
-        router.add_api_route(f"/check_deep/{_slug}", _handler, methods=["POST"], response_model=TargetResult)
+        router.add_api_route(
+            f"/check_deep/{_slug}", _handler, methods=["POST"], response_model=TargetResult, tags=["Deep Checks"]
+        )
     else:
-        router.add_api_route(f"/check/{_ct.value}", _handler, methods=["POST"], response_model=TargetResult)
+        router.add_api_route(
+            f"/check/{_ct.value}", _handler, methods=["POST"], response_model=TargetResult, tags=["Checks"]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -332,7 +334,7 @@ for _ct in CheckType:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/scan_domain")
+@router.post("/scan_domain", tags=["Scans"])
 async def scan_domain(
     request: DomainScanRequest,
     fmt: FormatParam = OutputFormat.JSON,
@@ -341,7 +343,7 @@ async def scan_domain(
     return _format_scan_response(result, fmt)
 
 
-@router.post("/check_domain/{check_type}")
+@router.post("/check_domain/{check_type}", tags=["Checks"])
 async def check_domain(
     check_type: CheckType,
     request: SingleCheckRequest,
@@ -356,7 +358,7 @@ async def check_domain(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/scan_ip")
+@router.post("/scan_ip", tags=["Scans"])
 async def scan_ip(
     request: IpScanRequest,
     fmt: FormatParam = OutputFormat.JSON,
@@ -368,7 +370,7 @@ async def scan_ip(
     return _format_scan_response(result, fmt)
 
 
-@router.post("/check_ip/{check_type}")
+@router.post("/check_ip/{check_type}", tags=["Checks"])
 async def check_ip(
     check_type: CheckType,
     request: SingleCheckRequest,
@@ -444,7 +446,7 @@ async def _run_scan_job(
             )
 
 
-@router.post("/scan/async", status_code=202, response_model=JobCreate)
+@router.post("/scan/async", status_code=202, response_model=JobCreate, tags=["Async Jobs"])
 async def scan_async(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
     if _shutting_down:
         return JSONResponse(status_code=503, content={"error": "shutting_down", "detail": "Server is shutting down"})
@@ -475,7 +477,7 @@ async def scan_async(request: ScanRequest, req: Request) -> JobCreate | JSONResp
     return JobCreate(job_id=job.job_id, status=job.status, created_at=job.created_at)
 
 
-@router.get("/scan/{job_id}", response_model=Job)
+@router.get("/scan/{job_id}", response_model=Job, tags=["Async Jobs"])
 async def get_scan_job(job_id: str, req: Request) -> Job | JSONResponse:
     store: JobStore = req.app.state.job_store
     job = await store.get(job_id)
@@ -484,7 +486,7 @@ async def get_scan_job(job_id: str, req: Request) -> Job | JSONResponse:
     return job
 
 
-@router.get("/scan/{job_id}/report", response_model=None)
+@router.get("/scan/{job_id}/report", response_model=None, tags=["Async Jobs"])
 async def get_scan_report(
     job_id: str,
     req: Request,
