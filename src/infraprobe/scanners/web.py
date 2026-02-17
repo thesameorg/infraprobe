@@ -410,13 +410,13 @@ async def _check_security_txt(
 # ---------------------------------------------------------------------------
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     """Web security scan: CORS, exposed paths, mixed content, robots.txt, security.txt."""
     findings: list[Finding] = []
     raw: dict[str, Any] = {}
 
     try:
-        async with scanner_client(timeout) as client:
+        async with scanner_client(timeout, auth=auth) as client:
             # Determine base URL (HTTPS first, HTTP fallback)
             base_url, main_resp = await fetch_with_fallback(target, client)
             raw["url"] = str(main_resp.url)

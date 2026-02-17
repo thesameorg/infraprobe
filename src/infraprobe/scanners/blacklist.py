@@ -142,11 +142,11 @@ async def _run_blacklist(
     return CheckResult(check=check_type, findings=findings, raw=raw)
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     """Light blacklist check — 2 major DNSBL sources (fast)."""
     return await _run_blacklist(CheckType.BLACKLIST, _DNSBLS_MAJOR, target, timeout)
 
 
-async def scan_deep(target: str, timeout: float = 30.0) -> CheckResult:
+async def scan_deep(target: str, timeout: float = 30.0, auth=None) -> CheckResult:
     """Deep blacklist check — all 15 DNSBL sources with per-zone timeout."""
     return await _run_blacklist(CheckType.BLACKLIST_DEEP, _DNSBLS_ALL, target, timeout)

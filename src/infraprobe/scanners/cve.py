@@ -161,7 +161,7 @@ async def _query_nvd(
 # ---------------------------------------------------------------------------
 
 
-async def scan(target: str, timeout: float = 30.0) -> CheckResult:
+async def scan(target: str, timeout: float = 30.0, auth=None) -> CheckResult:
     """CVE scanner: nmap version detection on top-20 ports → NVD API lookup."""
     try:
         host = parse_target(target).host

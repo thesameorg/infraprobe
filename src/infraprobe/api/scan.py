@@ -23,6 +23,7 @@ from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to
 from infraprobe.metrics import ACTIVE_SCANS, SCANNER_DURATION
 from infraprobe.models import (
     DNS_ONLY_CHECKS,
+    AuthConfig,
     CheckResult,
     CheckType,
     DomainScanRequest,
@@ -46,8 +47,8 @@ logger = logging.getLogger("infraprobe.scanner")
 FormatParam = Annotated[OutputFormat, Query(alias="format")]
 
 # Scanner registry: maps check type → scan function
-# Each scanner is async def scan(target, timeout) -> CheckResult
-type ScanFn = Callable[[str, float], Coroutine[None, None, CheckResult]]
+# Each scanner is async def scan(target, timeout, auth) -> CheckResult
+type ScanFn = Callable[[str, float, AuthConfig | None], Coroutine[None, None, CheckResult]]
 
 _SCANNERS: dict[CheckType, ScanFn] = {}
 
@@ -61,7 +62,9 @@ def register_scanner(check_type: CheckType, fn: ScanFn) -> None:
 _SCHEDULING_BUFFER = 0.5
 
 
-async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> CheckResult:
+async def _run_scanner(
+    check_type: CheckType, target: str, timeout: float, auth: AuthConfig | None = None
+) -> CheckResult:
     fn = _SCANNERS.get(check_type)
     if fn is None:
         return CheckResult(check=check_type, error=f"Scanner {check_type} not registered")
@@ -75,7 +78,7 @@ async def _run_scanner(check_type: CheckType, target: str, timeout: float) -> Ch
         extra={"check": check_type, "target": target, "scanner_timeout": timeout},
     )
     try:
-        result = await asyncio.wait_for(fn(target, timeout), timeout=timeout + _SCHEDULING_BUFFER)
+        result = await asyncio.wait_for(fn(target, timeout, auth), timeout=timeout + _SCHEDULING_BUFFER)
         duration_s = time.monotonic() - start
         duration_ms = int(duration_s * 1000)
         SCANNER_DURATION.labels(check=check_type).observe(duration_s)
@@ -144,7 +147,9 @@ def _check_nmap_backpressure(checks: list[CheckType]) -> None:
         raise CapacityExceededError("All nmap slots are in use. Retry later or use the async endpoint.")
 
 
-async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResult:
+async def _scan_target(
+    ctx: ScanContext, checks: list[CheckType], auth: AuthConfig | None = None
+) -> TargetResult:
     async with scan_semaphore():
         ACTIVE_SCANS.inc()
         start = time.monotonic()
@@ -156,6 +161,7 @@ async def _scan_target(ctx: ScanContext, checks: list[CheckType]) -> TargetResul
                     ct,
                     target_str,
                     settings.deep_scanner_timeout if ct in _DEEP_CHECKS else settings.scanner_timeout,
+                    auth,
                 )
                 for ct in checks
             ]
@@ -205,6 +211,7 @@ async def _run_scan_with_validator(
     targets: list[str],
     checks: list[CheckType],
     validator: Callable[[str], ScanContext],
+    auth: AuthConfig | None = None,
 ) -> ScanResponse:
     """Shared orchestration for all scan endpoints (generic, domain, IP)."""
     _check_nmap_backpressure(checks)
@@ -222,7 +229,7 @@ async def _run_scan_with_validator(
         },
     )
     start = time.monotonic()
-    target_results = await asyncio.gather(*[_scan_target(ctx, checks) for ctx in contexts])
+    target_results = await asyncio.gather(*[_scan_target(ctx, checks, auth) for ctx in contexts])
     for tr in target_results:
         logger.info(
             "target done: %s in %dms",
@@ -241,7 +248,7 @@ async def _run_scan_with_validator(
 
 
 async def _run_full_scan(request: ScanRequest) -> ScanResponse:
-    return await _run_scan_with_validator(request.targets, request.checks, validate_target)
+    return await _run_scan_with_validator(request.targets, request.checks, validate_target, request.auth)
 
 
 @router.post("/scan")
@@ -257,6 +264,7 @@ async def _run_single_check(
     check_type: CheckType,
     target: str,
     validator: Callable[[str], ScanContext],
+    auth: AuthConfig | None = None,
 ) -> TargetResult:
     """Shared orchestration for all single-check endpoints (generic, domain, IP)."""
     ctx = validator(target)
@@ -275,7 +283,7 @@ async def _run_single_check(
         },
     )
     start = time.monotonic()
-    result = await _scan_target(ctx, [check_type])
+    result = await _scan_target(ctx, [check_type], auth)
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info(
         "check request done: %s on %s in %dms",
@@ -293,7 +301,7 @@ async def _run_single_check(
 
 async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
     _check_nmap_backpressure([check_type])
-    return await _run_single_check(check_type, request.target, validate_target)
+    return await _run_single_check(check_type, request.target, validate_target, request.auth)
 
 
 def _make_check_handler(ct: CheckType):
@@ -329,7 +337,7 @@ async def scan_domain(
     request: DomainScanRequest,
     fmt: FormatParam = OutputFormat.JSON,
 ) -> ScanResponse:
-    result = await _run_scan_with_validator(request.targets, request.checks, validate_domain)
+    result = await _run_scan_with_validator(request.targets, request.checks, validate_domain, request.auth)
     return _format_scan_response(result, fmt)
 
 
@@ -339,7 +347,7 @@ async def check_domain(
     request: SingleCheckRequest,
     fmt: FormatParam = OutputFormat.JSON,
 ) -> TargetResult:
-    result = await _run_single_check(check_type, request.target, validate_domain)
+    result = await _run_single_check(check_type, request.target, validate_domain, request.auth)
     return _format_target_result(result, fmt)
 
 
@@ -356,7 +364,7 @@ async def scan_ip(
     invalid = set(request.checks) & DNS_ONLY_CHECKS
     if invalid:
         raise InvalidTargetError(f"DNS checks not applicable to IP targets: {', '.join(sorted(invalid))}")
-    result = await _run_scan_with_validator(request.targets, request.checks, validate_ip)
+    result = await _run_scan_with_validator(request.targets, request.checks, validate_ip, request.auth)
     return _format_scan_response(result, fmt)
 
 
@@ -368,7 +376,7 @@ async def check_ip(
 ) -> TargetResult:
     if check_type in DNS_ONLY_CHECKS:
         raise InvalidTargetError(f"Check type {check_type} not applicable to IP targets")
-    result = await _run_single_check(check_type, request.target, validate_ip)
+    result = await _run_single_check(check_type, request.target, validate_ip, request.auth)
     return _format_target_result(result, fmt)
 
 

@@ -64,9 +64,9 @@ def _analyze_response(adapted: _ResponseAdapter) -> dict:
     return create_result(techs)
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     try:
-        async with scanner_client(timeout) as client:
+        async with scanner_client(timeout, auth=auth) as client:
             url, resp = await fetch_with_fallback(target, client)
     except httpx.HTTPError as exc:
         return CheckResult(check=CheckType.TECH_DEEP, error=f"Cannot analyze {target}: {exc}")

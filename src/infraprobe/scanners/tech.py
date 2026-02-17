@@ -117,9 +117,9 @@ def _detect(
     return detected
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     try:
-        async with scanner_client(timeout) as client:
+        async with scanner_client(timeout, auth=auth) as client:
             _, resp = await fetch_with_fallback(target, client)
     except httpx.HTTPError as exc:
         return CheckResult(check=CheckType.TECH, error=f"Cannot connect to {target}: {exc}")

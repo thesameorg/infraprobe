@@ -134,7 +134,7 @@ def _check_caa(caa_records: list[str]) -> list[Finding]:
     ]
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     domain = parse_target(target).host
 
     try:

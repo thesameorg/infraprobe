@@ -10,8 +10,10 @@ Referenced from `CLAUDE.md`. For user-facing check descriptions, see `docs/guide
 Every scanner is a single async function:
 
 ```python
-async def scan(target: str, timeout: float) -> CheckResult
+async def scan(target: str, timeout: float, auth=None) -> CheckResult
 ```
+
+The `auth` parameter is an `AuthConfig | None` (see `models.py`). HTTP-based scanners (headers, tech, tech_deep, web) pass it to `scanner_client(timeout, auth=auth)`. Non-HTTP scanners accept the parameter but ignore it.
 
 The `target` string is the normalized host (or host:port). A `ScanContext` (from `infraprobe.target`) is available in the orchestrator with pre-resolved IPs and `is_ip` flag, but scanners receive the target as a plain string.
 
@@ -77,8 +79,8 @@ Scanners must handle their own errors. The orchestrator provides a safety net bu
 ## Adding a New Scanner
 
 1. Create `src/infraprobe/scanners/{name}.py`
-2. Implement `async def scan(target: str, timeout: float) -> CheckResult` following this contract
-3. For HTTP-based scanners, use `scanner_client(timeout)` and `fetch_with_fallback(target, client)` from `infraprobe.http` — do not duplicate the HTTPS-first/HTTP-fallback pattern
+2. Implement `async def scan(target: str, timeout: float, auth=None) -> CheckResult` following this contract
+3. For HTTP-based scanners, use `scanner_client(timeout, auth=auth)` and `fetch_with_fallback(target, client)` from `infraprobe.http` — do not duplicate the HTTPS-first/HTTP-fallback pattern. Non-HTTP scanners should accept `auth` but ignore it.
 4. Add enum value to `CheckType` in `models.py` if needed
 5. Register in `app.py`: `register_scanner(CheckType.{NAME}, {name}.scan)`
 6. Add integration test in `tests/test_scan.py` against a real target

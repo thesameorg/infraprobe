@@ -31,6 +31,7 @@ curl -X POST https://your-instance/v1/scan \
 |-------|------|----------|-------------|
 | `targets` | string[] | Yes | 1-10 domains or IPs |
 | `checks` | string[] | No | Check types to run (defaults vary by target type) |
+| `auth` | object | No | [Auth credentials](checks/auth.md) to send to scan targets |
 | `webhook_url` | string | No | URL to receive results when scan completes |
 | `webhook_secret` | string | No | HMAC-SHA256 key for signing webhook payloads |
 

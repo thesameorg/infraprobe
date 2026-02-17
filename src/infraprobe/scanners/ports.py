@@ -233,11 +233,11 @@ async def _run_scan(check_type: CheckType, target: str, timeout: float, deep: bo
         return CheckResult(check=check_type, error=f"Port scan failed: {exc}")
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     """Light port scan — top 20 ports, TCP connect, no version detection."""
     return await _run_scan(CheckType.PORTS, target, timeout, deep=False)
 
 
-async def scan_deep(target: str, timeout: float = 30.0) -> CheckResult:
+async def scan_deep(target: str, timeout: float = 30.0, auth=None) -> CheckResult:
     """Deep port scan — top 1000 ports, TCP connect, with version detection."""
     return await _run_scan(CheckType.PORTS_DEEP, target, timeout, deep=True)

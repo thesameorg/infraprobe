@@ -133,7 +133,7 @@ def _build_raw(domain: str, parsed: dict) -> dict:
     return raw
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     domain = parse_target(target).host
 
     try:

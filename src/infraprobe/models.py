@@ -1,8 +1,8 @@
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 TargetStr = Annotated[str, Field(max_length=2048)]
 
@@ -77,8 +77,51 @@ class CheckResult(BaseModel):
     error: str | None = None
 
 
+# ---------------------------------------------------------------------------
+# Auth config (discriminated union)
+# ---------------------------------------------------------------------------
+
+_FORBIDDEN_HEADERS = frozenset({"host", "content-length", "transfer-encoding", "connection"})
+
+
+class HeaderAuth(BaseModel):
+    type: Literal["header"]
+    headers: dict[str, str] = Field(min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def _reject_hop_by_hop(self) -> "HeaderAuth":
+        bad = {k for k in self.headers if k.lower() in _FORBIDDEN_HEADERS}
+        if bad:
+            msg = f"Forbidden header(s): {', '.join(sorted(bad))}"
+            raise ValueError(msg)
+        return self
+
+
+class BasicAuth(BaseModel):
+    type: Literal["basic"]
+    username: str = Field(max_length=256)
+    password: str = Field(max_length=256)
+
+
+class BearerAuth(BaseModel):
+    type: Literal["bearer"]
+    token: str = Field(max_length=8192)
+
+
+class CookieAuth(BaseModel):
+    type: Literal["cookie"]
+    cookies: dict[str, str] = Field(min_length=1, max_length=20)
+
+
+AuthConfig = Annotated[
+    HeaderAuth | BasicAuth | BearerAuth | CookieAuth,
+    Field(discriminator="type"),
+]
+
+
 class SingleCheckRequest(BaseModel):
     target: TargetStr
+    auth: AuthConfig | None = Field(default=None, exclude=True)
 
 
 class ScanRequest(BaseModel):
@@ -86,16 +129,19 @@ class ScanRequest(BaseModel):
     checks: list[CheckType] = Field(default_factory=lambda: list(LIGHT_CHECKS))
     webhook_url: Annotated[str, Field(max_length=2048)] | None = None
     webhook_secret: str | None = Field(default=None, exclude=True)
+    auth: AuthConfig | None = Field(default=None, exclude=True)
 
 
 class DomainScanRequest(BaseModel):
     targets: list[TargetStr] = Field(min_length=1, max_length=10)
     checks: list[CheckType] = Field(default_factory=lambda: list(DOMAIN_CHECKS))
+    auth: AuthConfig | None = Field(default=None, exclude=True)
 
 
 class IpScanRequest(BaseModel):
     targets: list[TargetStr] = Field(min_length=1, max_length=10)
     checks: list[CheckType] = Field(default_factory=lambda: list(IP_CHECKS))
+    auth: AuthConfig | None = Field(default=None, exclude=True)
 
 
 class TargetResult(BaseModel):

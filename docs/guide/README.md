@@ -71,4 +71,5 @@ Every scan returns findings organized by target and check type:
 ## Guides
 
 - [Getting Started](getting-started.md) — endpoints, examples, output formats, async scans
+- [Authenticated Scanning](checks/auth.md) — scan targets behind login walls with bearer tokens, basic auth, cookies, or custom headers
 - [Troubleshooting](troubleshooting.md) — error codes, common issues, performance tips

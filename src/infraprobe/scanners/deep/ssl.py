@@ -400,7 +400,7 @@ def _add_positive_findings(findings: list[Finding], raw: dict) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def scan(target: str, timeout: float = 10.0) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     host, port = parse_target(target)
     port = port or 443
 
