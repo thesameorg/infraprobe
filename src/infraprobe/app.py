@@ -121,7 +121,7 @@ class RequestLoggingMiddleware:
 app.add_middleware(RequestLoggingMiddleware)
 
 
-if settings.rapidapi_proxy_secret:
+if settings.rapidapi_proxy_secret and not settings.dev_bypass_auth:
 
     class _RapidAPIAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):  # type: ignore[override]
@@ -134,6 +134,8 @@ if settings.rapidapi_proxy_secret:
             return await call_next(request)
 
     app.add_middleware(_RapidAPIAuthMiddleware)
+elif settings.dev_bypass_auth:
+    logger.warning("DEV_BYPASS_AUTH is enabled — authentication disabled")
 
 
 @app.exception_handler(BlockedTargetError)

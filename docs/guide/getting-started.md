@@ -240,6 +240,10 @@ curl -X POST https://your-instance/v1/scan \
 
 Requests without a valid secret receive `403 Forbidden`.
 
+### Local Development
+
+To disable authentication for local development, set `INFRAPROBE_DEV_BYPASS_AUTH=true` in your `.env` file. When enabled, the RapidAPI proxy-secret middleware is skipped entirely and no auth header is required. Defaults to `false`.
+
 ---
 
 [Back to overview](README.md) | [Troubleshooting](troubleshooting.md)

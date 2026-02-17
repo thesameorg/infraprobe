@@ -92,7 +92,7 @@ Creates the FastAPI instance. Registers scanners into the module-level registry 
 
 Global exception handlers return consistent `{"error": "<code>", "detail": "<message>"}` shapes: `BlockedTargetError` → 400 `blocked_target`, `CapacityExceededError` → 429 `too_many_requests`, `InvalidTargetError` → 422 `invalid_target`, unhandled `Exception` → 500 `internal_error`.
 
-Optional RapidAPI proxy-secret middleware is enabled when `INFRAPROBE_RAPIDAPI_PROXY_SECRET` is set.
+Optional RapidAPI proxy-secret middleware is enabled when `INFRAPROBE_RAPIDAPI_PROXY_SECRET` is set, unless `INFRAPROBE_DEV_BYPASS_AUTH=true` which disables authentication entirely (for local development).
 
 Lifespan manages graceful shutdown: `drain_background_tasks(timeout=25)` waits for in-flight async scan jobs before stopping the cleanup loop.
 
@@ -145,6 +145,7 @@ SSRF protection layer. Called before any scanner runs.
 | `port` | `8080` | `INFRAPROBE_PORT` | `ge=1, le=65535` |
 | `scanner_timeout` | `10.0` | `INFRAPROBE_SCANNER_TIMEOUT` | `gt=0` |
 | `deep_scanner_timeout` | `30.0` | `INFRAPROBE_DEEP_SCANNER_TIMEOUT` | `gt=0` |
+| `dev_bypass_auth` | `false` | `INFRAPROBE_DEV_BYPASS_AUTH` | — |
 | `max_concurrent_scans` | `5` | `INFRAPROBE_MAX_CONCURRENT_SCANS` | `ge=1, le=50` |
 | `nmap_max_concurrent` | `6` | `INFRAPROBE_NMAP_MAX_CONCURRENT` | `ge=1, le=20` |
 | `job_ttl_seconds` | `3600` | `INFRAPROBE_JOB_TTL_SECONDS` | `gt=0` |

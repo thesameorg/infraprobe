@@ -19,6 +19,8 @@ def pytest_collection_modifyitems(config, items):
 
 @pytest.fixture
 def client():
-    headers = {"x-rapidapi-proxy-secret": settings.rapidapi_proxy_secret}
+    headers = {}
+    if settings.rapidapi_proxy_secret and not settings.dev_bypass_auth:
+        headers["x-rapidapi-proxy-secret"] = settings.rapidapi_proxy_secret
     with TestClient(app, headers=headers) as c:
         yield c

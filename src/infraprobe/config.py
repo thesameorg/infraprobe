@@ -2,7 +2,7 @@ import asyncio
 import functools
 import logging
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -12,8 +12,9 @@ class Settings(BaseSettings):
     port: int = Field(default=8080, ge=1, le=65535)
     scanner_timeout: float = Field(default=10.0, gt=0)
     deep_scanner_timeout: float = Field(default=30.0, gt=0)
-    rapidapi_proxy_secret: str = Field(min_length=1)
-    nvd_api_key: str = Field(min_length=1)
+    dev_bypass_auth: bool = False
+    rapidapi_proxy_secret: str = ""
+    nvd_api_key: str = ""
     job_ttl_seconds: int = Field(default=3600, gt=0)
     job_cleanup_interval: int = Field(default=300, gt=0)
     webhook_timeout: float = Field(default=5.0, gt=0)
@@ -30,6 +31,14 @@ class Settings(BaseSettings):
         if level is None:
             raise ValueError(f"Invalid log level: {v!r}. Must be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL")
         return v
+
+    @model_validator(mode="after")
+    def _require_secrets_unless_bypass(self) -> "Settings":
+        if self.dev_bypass_auth:
+            return self
+        if not self.rapidapi_proxy_secret:
+            raise ValueError("INFRAPROBE_RAPIDAPI_PROXY_SECRET is required (or set INFRAPROBE_DEV_BYPASS_AUTH=true)")
+        return self
 
 
 settings = Settings()
