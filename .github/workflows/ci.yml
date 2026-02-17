@@ -59,3 +59,8 @@ jobs:
           image: ${{ env.IMAGE }}:${{ github.sha }}
           region: ${{ vars.GCP_REGION }}
           flags: --concurrency=10 --memory=1Gi --cpu=2
+          env_vars: |
+            INFRAPROBE_RAPIDAPI_PROXY_SECRET=${{ secrets.INFRAPROBE_RAPIDAPI_PROXY_SECRET }}
+            INFRAPROBE_NVD_API_KEY=${{ secrets.INFRAPROBE_NVD_API_KEY }}
+            INFRAPROBE_ENV=production
+            INFRAPROBE_LOG_LEVEL=info
