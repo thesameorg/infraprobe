@@ -161,8 +161,18 @@ def test_blocked_target_logged(client, caplog):
 
 def test_scan_bundle_logs(client, caplog):
     """Bundle scan should log scan started, finished per check, target done, scan done."""
+    import time
+
     with caplog.at_level(logging.INFO, logger="infraprobe"):
-        client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers", "ssl"]})
+        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers", "ssl"]})
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        # Poll until background task completes so logs are captured
+        for _ in range(30):
+            poll = client.get(f"/v1/scan/{job_id}")
+            if poll.json()["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.5)
 
     messages = [r.message for r in caplog.records]
     assert any("scan started:" in m for m in messages)

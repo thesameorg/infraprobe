@@ -162,10 +162,13 @@ async def _query_nvd(
 
 
 async def scan(target: str, timeout: float = 30.0, auth=None) -> CheckResult:
-    """CVE scanner: nmap version detection on top-20 ports → NVD API lookup."""
+    """CVE scanner: nmap version detection on top-100 ports → NVD API lookup."""
     try:
         host = parse_target(target).host
         api_key = settings.nvd_api_key
+
+        if not api_key:
+            logger.warning("NVD API key not configured — CVE lookups will be rate-limited (5 req/30s without key)")
 
         # Re-validate and use pre-resolved IP for nmap to prevent DNS rebinding
         try:
@@ -179,7 +182,7 @@ async def scan(target: str, timeout: float = 30.0, auth=None) -> CheckResult:
         nvd_budget = timeout * 0.25
 
         nmap_host_timeout = max(3, int(nmap_budget - 1))
-        nmap_args = f"-sT -sV -T4 -Pn --top-ports 20 --host-timeout {nmap_host_timeout}s"
+        nmap_args = f"-sT -sV -T4 -Pn --top-ports 100 --host-timeout {nmap_host_timeout}s"
 
         async with nmap_semaphore():
             services = await asyncio.to_thread(_run_nmap_version, nmap_host, nmap_args)
@@ -293,6 +296,7 @@ async def scan(target: str, timeout: float = 30.0, auth=None) -> CheckResult:
                 "services": services,
                 "cves_found": len(all_cves),
                 "cves": all_cves,
+                "nvd_api_key_configured": bool(api_key),
             },
         )
 

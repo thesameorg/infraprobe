@@ -3,7 +3,7 @@
 Analyzes SSL/TLS certificate validity and protocol configuration.
 
 - **Check type:** `ssl` (light), `ssl_deep` (deep)
-- **Endpoint:** `POST /v1/check/ssl` or `POST /v1/check_deep/ssl_deep`
+- **Endpoint:** `POST /v1/check/ssl` or `POST /v1/check/ssl_deep`
 - **Default:** Yes (all targets)
 - **Port:** 443 (default)
 

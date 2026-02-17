@@ -3,7 +3,7 @@
 Scans for open TCP ports and classifies them by security risk using nmap.
 
 - **Check type:** `ports` (light), `ports_deep` (deep)
-- **Endpoint:** `POST /v1/check/ports` or `POST /v1/check_deep/ports_deep`
+- **Endpoint:** `POST /v1/check/ports` or `POST /v1/check/ports_deep`
 - **Default:** Opt-in (not included in default scans)
 
 ## What Is Checked

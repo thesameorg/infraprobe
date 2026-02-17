@@ -1,11 +1,10 @@
 import time
 
-import pytest
 from fastapi.testclient import TestClient
 
 
 def test_async_scan_submit_returns_202(client: TestClient):
-    resp = client.post("/v1/scan/async", json={"targets": ["example.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
     assert resp.status_code == 202
     body = resp.json()
     assert "job_id" in body
@@ -14,7 +13,7 @@ def test_async_scan_submit_returns_202(client: TestClient):
 
 
 def test_async_scan_poll_until_completed(client: TestClient):
-    resp = client.post("/v1/scan/async", json={"targets": ["example.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
     assert resp.status_code == 202
     job_id = resp.json()["job_id"]
 
@@ -37,7 +36,7 @@ def test_async_scan_poll_until_completed(client: TestClient):
 
 
 def test_async_scan_echoes_request(client: TestClient):
-    resp = client.post("/v1/scan/async", json={"targets": ["example.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
     job_id = resp.json()["job_id"]
 
     # Poll until done
@@ -64,10 +63,10 @@ def test_get_nonexistent_job_returns_404(client: TestClient):
 
 
 def test_async_scan_blocked_target_returns_400(client: TestClient):
-    resp = client.post("/v1/scan/async", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
     assert resp.status_code == 400
 
 
 def test_async_scan_invalid_target_returns_422(client: TestClient):
-    resp = client.post("/v1/scan/async", json={"targets": ["not a valid target!@#$"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["not a valid target!@#$"], "checks": ["headers"]})
     assert resp.status_code == 422

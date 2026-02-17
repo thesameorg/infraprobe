@@ -11,9 +11,7 @@ from infraprobe.models import (
     BasicAuth,
     BearerAuth,
     CookieAuth,
-    DomainScanRequest,
     HeaderAuth,
-    IpScanRequest,
     ScanRequest,
     SingleCheckRequest,
 )
@@ -131,12 +129,8 @@ class TestAuthConfigDiscriminator:
         req = ScanRequest(targets=["example.com"], auth={"type": "bearer", "token": "tok"})
         assert isinstance(req.auth, BearerAuth)
 
-    def test_auth_on_domain_scan_request(self):
-        req = DomainScanRequest(targets=["example.com"], auth={"type": "bearer", "token": "tok"})
-        assert isinstance(req.auth, BearerAuth)
-
-    def test_auth_on_ip_scan_request(self):
-        req = IpScanRequest(targets=["8.8.8.8"], auth={"type": "bearer", "token": "tok"})
+    def test_auth_on_scan_request_with_checks(self):
+        req = ScanRequest(targets=["example.com"], checks=["headers"], auth={"type": "bearer", "token": "tok"})
         assert isinstance(req.auth, BearerAuth)
 
 
@@ -156,13 +150,8 @@ class TestAuthExclude:
         dumped = req.model_dump()
         assert "auth" not in dumped
 
-    def test_domain_scan_request_excludes_auth(self):
-        req = DomainScanRequest(targets=["example.com"], auth={"type": "bearer", "token": "tok"})
-        dumped = req.model_dump()
-        assert "auth" not in dumped
-
-    def test_ip_scan_request_excludes_auth(self):
-        req = IpScanRequest(targets=["8.8.8.8"], auth={"type": "cookie", "cookies": {"s": "v"}})
+    def test_scan_request_with_checks_excludes_auth(self):
+        req = ScanRequest(targets=["example.com"], checks=["headers"], auth={"type": "bearer", "token": "tok"})
         dumped = req.model_dump()
         assert "auth" not in dumped
 
@@ -222,16 +211,16 @@ class TestScannerClientAuth:
 
 
 class TestCrossOriginRedirectStripping:
-    def test_same_origin_keeps_auth(self):
+    async def test_same_origin_keeps_auth(self):
         request = httpx.Request("GET", "https://example.com/page1")
         next_request = httpx.Request("GET", "https://example.com/page2", headers={"Authorization": "Bearer tok"})
         response = httpx.Response(302, request=request)
         response.next_request = next_request  # httpx internal, but we need it for testing
 
-        _strip_auth_on_cross_origin_redirect(response)
+        await _strip_auth_on_cross_origin_redirect(response)
         assert "authorization" in next_request.headers
 
-    def test_cross_origin_strips_auth(self):
+    async def test_cross_origin_strips_auth(self):
         request = httpx.Request("GET", "https://example.com/page1")
         next_request = httpx.Request(
             "GET",
@@ -241,15 +230,15 @@ class TestCrossOriginRedirectStripping:
         response = httpx.Response(302, request=request)
         response.next_request = next_request
 
-        _strip_auth_on_cross_origin_redirect(response)
+        await _strip_auth_on_cross_origin_redirect(response)
         assert "authorization" not in next_request.headers
         assert "cookie" not in next_request.headers
 
-    def test_no_next_request_is_noop(self):
+    async def test_no_next_request_is_noop(self):
         request = httpx.Request("GET", "https://example.com/page1")
         response = httpx.Response(200, request=request)
         # next_request is None by default
-        _strip_auth_on_cross_origin_redirect(response)  # should not raise
+        await _strip_auth_on_cross_origin_redirect(response)  # should not raise
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +261,7 @@ class TestAuthAPI:
                 "auth": {"type": "bearer", "token": "test-token"},
             },
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 202
         # Auth should not appear in response
         assert "auth" not in resp.text or '"auth"' not in resp.text
 
@@ -293,7 +282,7 @@ class TestAuthAPI:
             "/v1/scan",
             json={"targets": ["example.com"], "checks": ["dns"]},
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 202
 
     def test_invalid_auth_type_rejected(self, client):
         """Invalid auth type returns 422."""
@@ -307,9 +296,9 @@ class TestAuthAPI:
         assert resp.status_code == 422
 
     def test_auth_excluded_from_async_job_response(self, client):
-        """POST /v1/scan/async with auth → GET /v1/scan/{job_id} shouldn't leak auth."""
+        """POST /v1/scan with auth → GET /v1/scan/{job_id} shouldn't leak auth."""
         resp = client.post(
-            "/v1/scan/async",
+            "/v1/scan",
             json={
                 "targets": ["example.com"],
                 "checks": ["dns"],
@@ -333,18 +322,18 @@ class TestAuthAPI:
 
     def test_scan_domain_accepts_auth(self, client):
         resp = client.post(
-            "/v1/scan_domain",
+            "/v1/scan",
             json={
                 "targets": ["example.com"],
                 "checks": ["dns"],
                 "auth": {"type": "bearer", "token": "tok"},
             },
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 202
 
     def test_check_domain_accepts_auth(self, client):
         resp = client.post(
-            "/v1/check_domain/dns",
+            "/v1/check/dns",
             json={
                 "target": "example.com",
                 "auth": {"type": "bearer", "token": "tok"},

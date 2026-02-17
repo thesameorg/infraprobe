@@ -24,8 +24,7 @@ from infraprobe.scanners import headers_drheader as headers
 from infraprobe.scanners import ssl as ssl_scanner
 from infraprobe.scanners.deep import dns as dns_deep
 from infraprobe.scanners.deep import ssl as ssl_deep_scanner
-from infraprobe.scanners.deep import tech as tech_deep
-from infraprobe.storage import MemoryJobStore
+from infraprobe.storage import MemoryJobStore, create_job_store
 
 setup_logging()
 
@@ -37,17 +36,28 @@ _SKIP_PATHS = frozenset({"/health", "/health/ready", "/metrics"})
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    store = MemoryJobStore(
-        ttl_seconds=settings.job_ttl_seconds,
-        cleanup_interval=settings.job_cleanup_interval,
-    )
-    app.state.job_store = store
-    store.start_cleanup_loop()
-    reset_shutdown_flag()
-    yield
-    # Graceful shutdown: drain in-flight background tasks before stopping cleanup
-    await drain_background_tasks(timeout=25)
-    store.stop_cleanup_loop()
+    if settings.job_store_backend == "firestore":
+        store = create_job_store(
+            backend="firestore",
+            project=settings.firestore_project,
+            database=settings.firestore_database,
+            ttl_seconds=settings.job_ttl_seconds,
+        )
+        app.state.job_store = store
+        reset_shutdown_flag()
+        yield
+        await drain_background_tasks(timeout=25)
+    else:
+        store = MemoryJobStore(
+            ttl_seconds=settings.job_ttl_seconds,
+            cleanup_interval=settings.job_cleanup_interval,
+        )
+        app.state.job_store = store
+        store.start_cleanup_loop()
+        reset_shutdown_flag()
+        yield
+        await drain_background_tasks(timeout=25)
+        store.stop_cleanup_loop()
 
 
 app = FastAPI(
@@ -55,10 +65,8 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
     openapi_tags=[
-        {"name": "Scans", "description": "Bundle scan endpoints — run multiple checks against one or more targets."},
-        {"name": "Checks", "description": "Individual light checks — fast, single-check endpoints."},
-        {"name": "Deep Checks", "description": "Individual deep checks — slower, more thorough analysis."},
-        {"name": "Async Jobs", "description": "Asynchronous scanning with polling and webhook support."},
+        {"name": "Scans", "description": "Bundle scan endpoints — always async. Submit scan, poll for results."},
+        {"name": "Checks", "description": "Individual check endpoints — fast checks inline, slow checks async."},
         {"name": "Internal", "description": "Health probes and observability."},
     ],
 )
@@ -185,7 +193,6 @@ register_scanner(CheckType.WHOIS, whois_scanner.scan)
 # Deep scanners (slower, more thorough)
 register_scanner(CheckType.SSL_DEEP, ssl_deep_scanner.scan)
 register_scanner(CheckType.DNS_DEEP, dns_deep.scan)
-register_scanner(CheckType.TECH_DEEP, tech_deep.scan)
 register_scanner(CheckType.BLACKLIST_DEEP, blacklist.scan_deep)
 register_scanner(CheckType.PORTS, ports.scan)
 register_scanner(CheckType.PORTS_DEEP, ports.scan_deep)
@@ -202,11 +209,12 @@ async def health() -> dict[str, str]:
 
 @app.get("/health/ready", tags=["Internal"])
 async def health_ready(request: Request) -> JSONResponse:
-    """Readiness probe — checks that the cleanup task is alive."""
-    store: MemoryJobStore = request.app.state.job_store
-    task = store._cleanup_task
-    if task is None or task.done():
-        return JSONResponse(status_code=503, content={"status": "not ready", "reason": "cleanup task not running"})
+    """Readiness probe — checks that the job store is available."""
+    store = request.app.state.job_store
+    if isinstance(store, MemoryJobStore):
+        task = store._cleanup_task
+        if task is None or task.done():
+            return JSONResponse(status_code=503, content={"status": "not ready", "reason": "cleanup task not running"})
     return JSONResponse(status_code=200, content={"status": "ready"})
 
 

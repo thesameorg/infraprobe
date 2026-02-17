@@ -3,7 +3,7 @@
 Queries DNS records and evaluates email authentication (SPF, DMARC) and certificate authority authorization (CAA).
 
 - **Check type:** `dns` (light), `dns_deep` (deep)
-- **Endpoint:** `POST /v1/check/dns` or `POST /v1/check_deep/dns_deep`
+- **Endpoint:** `POST /v1/check/dns` or `POST /v1/check/dns_deep`
 - **Default:** Yes (domains only)
 - **Not available for IP targets**
 

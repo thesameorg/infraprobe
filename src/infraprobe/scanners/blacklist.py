@@ -42,8 +42,8 @@ def _reverse_ip(ip: str) -> str:
     return ".".join(reversed(ip.split(".")))
 
 
-def _resolve_target_ip(target: str) -> str:
-    """Resolve target to an IPv4 address synchronously (for initial resolution)."""
+async def _resolve_target_ip(target: str) -> str:
+    """Resolve target to an IPv4 address asynchronously."""
     host = parse_target(target).host
 
     # Try to parse as IP first
@@ -53,8 +53,9 @@ def _resolve_target_ip(target: str) -> str:
     except OSError:
         pass
 
-    # Resolve hostname to IP
-    info = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+    # Resolve hostname to IP asynchronously
+    loop = asyncio.get_running_loop()
+    info = await loop.getaddrinfo(host, None, family=socket.AF_INET, type=socket.SOCK_STREAM)
     if not info:
         raise ValueError(f"Cannot resolve {host} to IPv4")
     return str(info[0][4][0])
@@ -85,7 +86,7 @@ async def _run_blacklist(
     timeout: float,
 ) -> CheckResult:
     try:
-        ip = _resolve_target_ip(target)
+        ip = await _resolve_target_ip(target)
     except Exception as exc:
         return CheckResult(check=check_type, error=f"Cannot resolve {target} to IPv4: {exc}")
 

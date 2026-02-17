@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from infraprobe.models import AuthConfig
 
 
-def _strip_auth_on_cross_origin_redirect(response: httpx.Response) -> None:
+async def _strip_auth_on_cross_origin_redirect(response: httpx.Response) -> None:
     """Strip credentials when a redirect crosses to a different host."""
     if response.next_request is None:
         return
@@ -65,9 +65,7 @@ def scanner_client(
     if event_hooks:
         kwargs["event_hooks"] = event_hooks
 
-    return httpx.AsyncClient(
-        verify=False, timeout=timeouts, follow_redirects=follow_redirects, **kwargs
-    )
+    return httpx.AsyncClient(verify=False, timeout=timeouts, follow_redirects=follow_redirects, **kwargs)
 
 
 async def fetch_with_fallback(target: str, client: httpx.AsyncClient) -> tuple[str, httpx.Response]:

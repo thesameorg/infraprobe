@@ -3,7 +3,6 @@ import hmac
 import json
 import time
 
-import pytest
 from fastapi.testclient import TestClient
 from pytest_httpserver import HTTPServer
 
@@ -28,7 +27,7 @@ def test_webhook_delivered_on_scan_complete(client: TestClient, httpserver: HTTP
     webhook_url = httpserver.url_for("/webhook")
 
     resp = client.post(
-        "/v1/scan/async",
+        "/v1/scan",
         json={"targets": ["example.com"], "checks": ["headers"], "webhook_url": webhook_url},
     )
     assert resp.status_code == 202
@@ -58,7 +57,7 @@ def test_webhook_includes_hmac_signature(client: TestClient, httpserver: HTTPSer
     secret = "my-test-secret"
 
     resp = client.post(
-        "/v1/scan/async",
+        "/v1/scan",
         json={
             "targets": ["example.com"],
             "checks": ["headers"],
@@ -86,7 +85,7 @@ def test_webhook_includes_hmac_signature(client: TestClient, httpserver: HTTPSer
 def test_webhook_invalid_url_returns_422(client: TestClient):
     # Private IP webhook should be rejected (SSRF protection)
     resp = client.post(
-        "/v1/scan/async",
+        "/v1/scan",
         json={"targets": ["example.com"], "checks": ["headers"], "webhook_url": "http://10.0.0.1/hook"},
     )
     assert resp.status_code == 422
@@ -99,7 +98,7 @@ def test_webhook_status_tracked_on_job(client: TestClient, httpserver: HTTPServe
     webhook_url = httpserver.url_for("/webhook")
 
     resp = client.post(
-        "/v1/scan/async",
+        "/v1/scan",
         json={"targets": ["example.com"], "checks": ["headers"], "webhook_url": webhook_url},
     )
     assert resp.status_code == 202
@@ -117,7 +116,7 @@ def test_webhook_status_tracked_on_job(client: TestClient, httpserver: HTTPServe
 
 def test_no_webhook_when_url_not_provided(client: TestClient):
     resp = client.post(
-        "/v1/scan/async",
+        "/v1/scan",
         json={"targets": ["example.com"], "checks": ["headers"]},
     )
     assert resp.status_code == 202
@@ -135,7 +134,7 @@ def test_webhook_secret_not_in_job_response(client: TestClient, httpserver: HTTP
     webhook_url = httpserver.url_for("/webhook")
 
     resp = client.post(
-        "/v1/scan/async",
+        "/v1/scan",
         json={
             "targets": ["example.com"],
             "checks": ["headers"],

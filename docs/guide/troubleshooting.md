@@ -16,8 +16,9 @@ All error responses are JSON with this structure:
 | 400 | `blocked_target` | Target is a private/reserved IP address (SSRF protection) |
 | 403 | `forbidden` | Missing or invalid `x-rapidapi-proxy-secret` header |
 | 404 | `not_found` | Job ID does not exist |
-| 409 | `job_not_ready` | Job has not completed yet (poll again later) |
 | 422 | `invalid_target` | Target format is invalid, or a DNS-only check was requested for an IP |
+| 422 | `threshold_exceeded` | `fail_on` threshold matched — findings at or above severity exist |
+| 422 | `invalid_parameter` | Invalid `fail_on` severity value |
 | 500 | `internal_error` | Unexpected server error |
 | 503 | `shutting_down` | Server is shutting down; retry after a moment |
 
@@ -51,7 +52,7 @@ InfraProbe blocks scanning of private and reserved IP ranges (10.x.x.x, 172.16-3
 
 ### DNS-only checks fail for IP targets
 
-The `dns`, `dns_deep`, and `whois` checks require a domain name. Using them with IP-specific endpoints (`/v1/scan_ip`, `/v1/check_ip/{type}`) returns a 422 error. Use the generic endpoints or domain-specific endpoints instead.
+The `dns`, `dns_deep`, and `whois` checks require a domain name. Using them with IP targets returns a 422 error. InfraProbe auto-detects target type — if you omit `checks`, IP targets automatically get IP-appropriate defaults (headers, ssl, tech, blacklist).
 
 ### Scan returns mostly "info" findings
 
@@ -75,8 +76,7 @@ Checks that produce no findings and no errors are omitted from CSV output. SARIF
 ## Performance Tips
 
 - **Use specific checks** instead of running all defaults when you only need certain data
-- **Use domain or IP endpoints** (`/v1/scan_domain`, `/v1/scan_ip`) when your target type is known, to avoid unnecessary check validation
-- **Use async scans** for multi-target or deep scans to avoid HTTP timeouts
+- **All bundle scans are async** — `POST /v1/scan` always returns 202, so there's no HTTP timeout concern for long scans
 - **Batch targets** in a single `/v1/scan` request (up to 10) rather than making separate requests
 - **Start with light scans** — deep variants provide more detail but take longer; use them when light results indicate areas of concern
 
@@ -85,7 +85,7 @@ Checks that produce no findings and no errors are omitted from CSV output. SARIF
 | Scan type | Timeout |
 |-----------|---------|
 | Light checks (headers, ssl, dns, tech, blacklist, whois, web, ports) | 10 seconds |
-| Deep checks (ssl_deep, dns_deep, tech_deep, blacklist_deep, ports_deep, cve) | 30 seconds |
+| Deep checks (ssl_deep, dns_deep, blacklist_deep, ports_deep, cve) | 30 seconds |
 
 These are per-scanner timeouts. A bundle scan runs all selected checks in parallel, so total wall-clock time is roughly the slowest individual check.
 

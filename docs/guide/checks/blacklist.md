@@ -3,7 +3,7 @@
 Checks whether the target's IP address appears on DNS-based blocklists (DNSBLs) used by email providers and security services to identify spam, malware, and abuse.
 
 - **Check type:** `blacklist` (light), `blacklist_deep` (deep)
-- **Endpoint:** `POST /v1/check/blacklist` or `POST /v1/check_deep/blacklist_deep`
+- **Endpoint:** `POST /v1/check/blacklist` or `POST /v1/check/blacklist_deep`
 - **Default:** Yes (all targets)
 
 ## What Is Checked

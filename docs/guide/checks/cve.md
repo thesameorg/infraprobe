@@ -3,7 +3,7 @@
 Detects known vulnerabilities (CVEs) by identifying running service versions and querying the National Vulnerability Database (NVD).
 
 - **Check type:** `cve`
-- **Endpoint:** `POST /v1/check_deep/cve`
+- **Endpoint:** `POST /v1/check/cve`
 - **Default:** Opt-in (not included in default scans)
 - **Deep variant:** This is itself a deep-level check (30-second timeout)
 

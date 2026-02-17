@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 
 import pytest
+from helpers import poll_until_done, submit_scan
 
 from infraprobe.formatters.csv import scan_response_to_csv, target_result_to_csv
 from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
@@ -177,19 +178,25 @@ class TestFormatQueryParam:
     """Test ?format= query parameter on live endpoints."""
 
     def test_default_format_is_json(self, client):
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
-        assert resp.status_code == 200
-        assert resp.headers["content-type"].startswith("application/json")
-        # Should be normal JSON (has "results" key)
-        assert "results" in resp.json()
+        """POST /v1/scan returns 202; poll result is JSON by default."""
+        result = submit_scan(client, {"targets": ["example.com"], "checks": ["headers"]})
+        # submit_scan returns the ScanResponse dict from the completed job
+        assert "results" in result
 
     def test_explicit_json_format(self, client):
-        resp = client.post("/v1/scan?format=json", json={"targets": ["example.com"], "checks": ["headers"]})
+        """Use /v1/check/headers?format=json for single-check format test."""
+        resp = client.post("/v1/check/headers?format=json", json={"target": "example.com"})
         assert resp.status_code == 200
         assert "results" in resp.json()
 
     def test_sarif_format_on_scan(self, client):
-        resp = client.post("/v1/scan?format=sarif", json={"targets": ["example.com"], "checks": ["headers"]})
+        """Submit scan, poll until done, then GET /v1/scan/{job_id}?format=sarif."""
+        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        poll_until_done(client, job_id)
+
+        resp = client.get(f"/v1/scan/{job_id}?format=sarif")
         assert resp.status_code == 200
         assert "sarif" in resp.headers["content-type"]
 
@@ -209,8 +216,9 @@ class TestFormatQueryParam:
         assert sarif["version"] == "2.1.0"
         assert len(sarif["runs"][0]["results"]) > 0
 
-    def test_sarif_format_on_check_domain(self, client):
-        resp = client.post("/v1/check_domain/headers?format=sarif", json={"target": "example.com"})
+    def test_sarif_format_on_check(self, client):
+        """Use /v1/check/headers (replaces removed /v1/check_domain/headers)."""
+        resp = client.post("/v1/check/headers?format=sarif", json={"target": "example.com"})
         assert resp.status_code == 200
         assert "sarif" in resp.headers["content-type"]
 
@@ -218,7 +226,8 @@ class TestFormatQueryParam:
         assert sarif["version"] == "2.1.0"
 
     def test_invalid_format_returns_422(self, client):
-        resp = client.post("/v1/scan?format=xml", json={"targets": ["example.com"], "checks": ["headers"]})
+        """Invalid format on a synchronous endpoint returns 422."""
+        resp = client.post("/v1/check/headers?format=xml", json={"target": "example.com"})
         assert resp.status_code == 422
 
     def test_sarif_is_valid_json(self, client):
@@ -337,7 +346,13 @@ class TestCsvFormatQueryParam:
     """Test ?format=csv query parameter on live endpoints."""
 
     def test_csv_format_on_scan(self, client):
-        resp = client.post("/v1/scan?format=csv", json={"targets": ["example.com"], "checks": ["headers"]})
+        """Submit scan, poll until done, then GET /v1/scan/{job_id}?format=csv."""
+        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        assert resp.status_code == 202
+        job_id = resp.json()["job_id"]
+        poll_until_done(client, job_id)
+
+        resp = client.get(f"/v1/scan/{job_id}?format=csv")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/csv")
         rows = _parse_csv(resp.text)
@@ -352,8 +367,9 @@ class TestCsvFormatQueryParam:
         assert rows[0][0] == "target"
         assert len(rows) > 1
 
-    def test_csv_format_on_check_domain(self, client):
-        resp = client.post("/v1/check_domain/headers?format=csv", json={"target": "example.com"})
+    def test_csv_format_on_check(self, client):
+        """Use /v1/check/headers (replaces removed /v1/check_domain/headers)."""
+        resp = client.post("/v1/check/headers?format=csv", json={"target": "example.com"})
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/csv")
 
@@ -366,7 +382,7 @@ class TestCsvFormatQueryParam:
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/scan/{job_id}/report — unit tests (seed jobs directly in store)
+# GET /v1/scan/{job_id} — unit tests (seed jobs directly in store)
 # ---------------------------------------------------------------------------
 
 
@@ -385,13 +401,14 @@ def _completed_job(job_id: str = "test-job") -> Job:
 
 
 class TestGetScanReport:
-    """Test GET /v1/scan/{job_id}/report endpoint."""
+    """Test GET /v1/scan/{job_id} endpoint (merged poll + report)."""
 
     def test_report_not_found(self, client):
-        resp = client.get("/v1/scan/nonexistent/report")
+        resp = client.get("/v1/scan/nonexistent")
         assert resp.status_code == 404
 
-    def test_report_pending_job_returns_409(self, client):
+    def test_pending_job_returns_status(self, client):
+        """A running job returns 200 with job status (not 409)."""
         store = client.app.state.job_store
         now = datetime.now(UTC)
         store._jobs["pending-job"] = Job(
@@ -401,28 +418,33 @@ class TestGetScanReport:
             updated_at=now,
             request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
         )
-        resp = client.get("/v1/scan/pending-job/report")
-        assert resp.status_code == 409
-        assert "running" in resp.json()["detail"]
+        resp = client.get("/v1/scan/pending-job")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "running"
+        assert data["job_id"] == "pending-job"
+        # No result yet
+        assert data.get("result") is None
 
     def test_report_json(self, client):
         store = client.app.state.job_store
         job = _completed_job("json-job")
         store._jobs[job.job_id] = job
 
-        resp = client.get("/v1/scan/json-job/report")
+        resp = client.get("/v1/scan/json-job")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("application/json")
         data = resp.json()
-        assert "results" in data
-        assert data["results"][0]["target"] == "example.com"
+        assert data["status"] == "completed"
+        assert "result" in data
+        assert data["result"]["results"][0]["target"] == "example.com"
 
     def test_report_sarif(self, client):
         store = client.app.state.job_store
         job = _completed_job("sarif-job")
         store._jobs[job.job_id] = job
 
-        resp = client.get("/v1/scan/sarif-job/report?format=sarif")
+        resp = client.get("/v1/scan/sarif-job?format=sarif")
         assert resp.status_code == 200
         assert "sarif" in resp.headers["content-type"]
         sarif = resp.json()
@@ -434,7 +456,7 @@ class TestGetScanReport:
         job = _completed_job("csv-job")
         store._jobs[job.job_id] = job
 
-        resp = client.get("/v1/scan/csv-job/report?format=csv")
+        resp = client.get("/v1/scan/csv-job?format=csv")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/csv")
         rows = _parse_csv(resp.text)
@@ -442,7 +464,8 @@ class TestGetScanReport:
         assert len(rows) == 2
         assert rows[1][0] == "example.com"
 
-    def test_report_failed_job_returns_409(self, client):
+    def test_failed_job_returns_status_with_error(self, client):
+        """A failed job returns 200 with job status and error field (not 409)."""
         store = client.app.state.job_store
         now = datetime.now(UTC)
         store._jobs["failed-job"] = Job(
@@ -453,6 +476,9 @@ class TestGetScanReport:
             request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
             error="Something broke",
         )
-        resp = client.get("/v1/scan/failed-job/report")
-        assert resp.status_code == 409
-        assert "failed" in resp.json()["detail"]
+        resp = client.get("/v1/scan/failed-job")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "failed"
+        assert data["error"] == "Something broke"
+        assert data["job_id"] == "failed-job"

@@ -31,6 +31,8 @@ from infraprobe.target import parse_target
 # Core commands that complete in ~1s
 _SCAN_COMMANDS: set[ScanCommand] = {
     ScanCommand.CERTIFICATE_INFO,
+    ScanCommand.TLS_1_0_CIPHER_SUITES,
+    ScanCommand.TLS_1_1_CIPHER_SUITES,
     ScanCommand.TLS_1_2_CIPHER_SUITES,
     ScanCommand.TLS_1_3_CIPHER_SUITES,
     ScanCommand.HEARTBLEED,
@@ -44,7 +46,6 @@ _WEAK_CIPHER_FRAGMENTS = ("RC4", "DES", "3DES", "EXPORT", "NULL", "anon")
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
 
 
 def _run_sslyze(host: str, port: int) -> ServerScanResult:
@@ -227,15 +228,20 @@ def _check_certificate(scan_result: Any, host: str, findings: list[Finding], raw
 
 
 def _check_protocols(scan_result: Any, findings: list[Finding], raw: dict) -> None:
-    """Check TLS 1.2/1.3 cipher suites for weak ciphers."""
+    """Check TLS protocol support and cipher suites for weaknesses."""
     supported_protocols: list[str] = []
     all_accepted: list[str] = []
+    deprecated_protocols: list[str] = []
 
-    for attr_name, proto_name in [
-        ("tls_1_2_cipher_suites", "TLS 1.2"),
-        ("tls_1_3_cipher_suites", "TLS 1.3"),
+    for attr_name, proto_name, is_deprecated in [
+        ("tls_1_0_cipher_suites", "TLS 1.0", True),
+        ("tls_1_1_cipher_suites", "TLS 1.1", True),
+        ("tls_1_2_cipher_suites", "TLS 1.2", False),
+        ("tls_1_3_cipher_suites", "TLS 1.3", False),
     ]:
-        attempt = getattr(scan_result, attr_name)
+        attempt = getattr(scan_result, attr_name, None)
+        if attempt is None:
+            continue
         result: Any = _get_result(attempt)
         if result is None:
             continue
@@ -243,6 +249,9 @@ def _check_protocols(scan_result: Any, findings: list[Finding], raw: dict) -> No
             supported_protocols.append(proto_name)
             cipher_names = [c.cipher_suite.name for c in result.accepted_cipher_suites]
             all_accepted.extend(cipher_names)
+
+            if is_deprecated:
+                deprecated_protocols.append(proto_name)
 
             # Check for weak ciphers in accepted suites
             for cipher_accepted in result.accepted_cipher_suites:
@@ -259,8 +268,20 @@ def _check_protocols(scan_result: Any, findings: list[Finding], raw: dict) -> No
                         )
                         break
 
+    # Flag deprecated TLS versions
+    for proto in deprecated_protocols:
+        findings.append(
+            Finding(
+                severity=Severity.HIGH,
+                title=f"Deprecated protocol supported: {proto}",
+                description=f"Server supports {proto}, which is deprecated and has known vulnerabilities. Disable it.",
+                details={"protocol": proto},
+            )
+        )
+
     # No TLS 1.2 or 1.3 support
-    if not supported_protocols:
+    modern = [p for p in supported_protocols if p not in ("TLS 1.0", "TLS 1.1")]
+    if not modern:
         findings.append(
             Finding(
                 severity=Severity.HIGH,
@@ -270,7 +291,8 @@ def _check_protocols(scan_result: Any, findings: list[Finding], raw: dict) -> No
         )
 
     raw["supported_protocols"] = supported_protocols
-    raw["accepted_ciphers_tls12_13"] = all_accepted
+    raw["deprecated_protocols"] = deprecated_protocols
+    raw["accepted_ciphers"] = all_accepted
 
 
 def _check_vulnerabilities(scan_result: Any, findings: list[Finding], raw: dict) -> None:

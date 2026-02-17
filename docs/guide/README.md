@@ -9,7 +9,7 @@ InfraProbe is an infrastructure security scanning API. Send it a domain or IP ad
 | [headers](checks/headers.md) | HTTP security headers | Yes | No |
 | [ssl](checks/ssl.md) | SSL/TLS certificate & protocol | Yes | [ssl_deep](checks/ssl.md#deep-scan) |
 | [dns](checks/dns.md) | DNS records, SPF, DMARC, CAA | Yes (domains) | [dns_deep](checks/dns.md#deep-scan) |
-| [tech](checks/tech.md) | Technology fingerprinting | Yes | [tech_deep](checks/tech.md#deep-scan) |
+| [tech](checks/tech.md) | Technology fingerprinting (Wappalyzer) | Yes | No |
 | [blacklist](checks/blacklist.md) | DNSBL spam/abuse lists | Yes | [blacklist_deep](checks/blacklist.md#deep-scan) |
 | [whois](checks/whois.md) | Domain registration & expiry | Yes (domains) | No |
 | [web](checks/web.md) | CORS, exposed paths, security.txt | Opt-in | No |
@@ -36,7 +36,7 @@ Findings use five severity levels:
 
 ## Response Structure
 
-Every scan returns findings organized by target and check type:
+Every scan returns findings organized by target and check type, with severity summaries:
 
 ```json
 {
@@ -58,9 +58,11 @@ Every scan returns findings organized by target and check type:
           "error": null
         }
       },
-      "duration_ms": 1234
+      "duration_ms": 1234,
+      "summary": {"critical": 0, "high": 0, "medium": 1, "low": 0, "info": 0, "total": 1}
     }
-  ]
+  ],
+  "summary": {"critical": 0, "high": 0, "medium": 1, "low": 0, "info": 0, "total": 1}
 }
 ```
 

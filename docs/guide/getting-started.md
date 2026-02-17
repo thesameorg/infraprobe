@@ -4,12 +4,12 @@
 
 All endpoints are under the `/v1` prefix.
 
-### Bundle Scan
+### Bundle Scan (always async)
 
-Scan one or more targets with multiple checks at once.
+Scan one or more targets with multiple checks at once. Always returns `202 Accepted` with a job ID — poll for results.
 
 ```bash
-# Scan a domain with default checks
+# Scan a domain with default checks (auto-detected based on target type)
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{"targets": ["example.com"]}'
@@ -25,67 +25,64 @@ curl -X POST https://your-instance/v1/scan \
   -d '{"targets": ["example.com", "example.org"]}'
 ```
 
+Response (`202 Accepted`):
+
+```json
+{
+  "job_id": "a1b2c3d4e5f6...",
+  "status": "pending",
+  "created_at": "2025-01-15T10:30:00Z"
+}
+```
+
 **Request body:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `targets` | string[] | Yes | 1-10 domains or IPs |
-| `checks` | string[] | No | Check types to run (defaults vary by target type) |
+| `checks` | string[] | No | Check types to run (auto-detected from target type if omitted) |
 | `auth` | object | No | [Auth credentials](checks/auth.md) to send to scan targets |
 | `webhook_url` | string | No | URL to receive results when scan completes |
 | `webhook_secret` | string | No | HMAC-SHA256 key for signing webhook payloads |
 
+**Auto-detection:** When `checks` is omitted, InfraProbe selects defaults based on target type:
+- **Domains:** headers, ssl, dns, tech, blacklist, whois
+- **IPs:** headers, ssl, tech, blacklist
+
+DNS-only checks (`dns`, `dns_deep`, `whois`) are rejected for IP targets with a 422 error.
+
+### Poll for Results
+
+```bash
+curl https://your-instance/v1/scan/a1b2c3d4e5f6...
+```
+
+Returns the full job with its current status (`pending`, `running`, `completed`, or `failed`). When completed, `result` contains the scan response with findings. The `format` and `fail_on` query parameters work on this endpoint (see below).
+
 ### Single Check
 
-Run one check type against a single target.
+Run one check type against a single target. Fast checks (headers, ssl, dns, etc.) return results inline (`200`). Slow checks (ports, ports_deep, cve) return `202` with a job ID.
 
 ```bash
-# Light check
-curl -X POST https://your-instance/v1/check/ssl \
+# Fast check — returns 200 with results inline
+curl -X POST https://your-instance/v1/check/headers \
   -H "Content-Type: application/json" \
   -d '{"target": "example.com"}'
 
-# Deep check
-curl -X POST https://your-instance/v1/check_deep/ssl_deep \
+# Deep check — also inline
+curl -X POST https://your-instance/v1/check/ssl_deep \
   -H "Content-Type: application/json" \
   -d '{"target": "example.com"}'
-```
 
-### Domain-Specific Endpoints
-
-These reject IP addresses and default to domain checks (headers, ssl, dns, tech, blacklist, whois).
-
-```bash
-# Bundle domain scan
-curl -X POST https://your-instance/v1/scan_domain \
+# Slow check — returns 202, poll for results
+curl -X POST https://your-instance/v1/check/ports \
   -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"]}'
-
-# Single domain check
-curl -X POST https://your-instance/v1/check_domain/dns \
-  -H "Content-Type: application/json" \
-  -d '{"target": "example.com"}'
-```
-
-### IP-Specific Endpoints
-
-These reject domain names and default to IP checks (headers, ssl, tech, blacklist). DNS and whois checks are not allowed.
-
-```bash
-# Bundle IP scan
-curl -X POST https://your-instance/v1/scan_ip \
-  -H "Content-Type: application/json" \
-  -d '{"targets": ["93.184.216.34"]}'
-
-# Single IP check
-curl -X POST https://your-instance/v1/check_ip/ssl \
-  -H "Content-Type: application/json" \
-  -d '{"target": "93.184.216.34"}'
+  -d '{"target": "scanme.nmap.org"}'
 ```
 
 ## Reading Results
 
-A scan response contains one `TargetResult` per target:
+A scan response contains one `TargetResult` per target, with a severity summary:
 
 ```json
 {
@@ -112,9 +109,11 @@ A scan response contains one `TargetResult` per target:
           "error": null
         }
       },
-      "duration_ms": 823
+      "duration_ms": 823,
+      "summary": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 1, "total": 1}
     }
-  ]
+  ],
+  "summary": {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 1, "total": 1}
 }
 ```
 
@@ -126,6 +125,23 @@ A scan response contains one `TargetResult` per target:
 - `findings[].details` — structured data relevant to the finding
 - `raw` — full scanner output (varies by check type, see individual check docs)
 - `error` — non-null string if the scanner failed; other checks still complete normally
+- `summary` — severity counts aggregated across all findings (per-target and per-scan)
+
+## CI/CD Gating with `fail_on`
+
+Use the `fail_on` query parameter to gate CI/CD pipelines based on finding severity:
+
+```bash
+# Fail if any high or critical findings exist
+curl "https://your-instance/v1/scan/a1b2c3d4...?fail_on=high,critical"
+
+# Fail on medium and above
+curl -X POST "https://your-instance/v1/check/headers?fail_on=medium" \
+  -H "Content-Type: application/json" \
+  -d '{"target": "example.com"}'
+```
+
+When findings at or above the threshold exist, the response is `422` with `error: "threshold_exceeded"` and the full results included. Pipelines can check the HTTP status code — no JSON parsing needed for pass/fail.
 
 ## Output Formats
 
@@ -134,9 +150,9 @@ Use the `format` query parameter to change the response format.
 ### JSON (default)
 
 ```bash
-curl -X POST "https://your-instance/v1/scan?format=json" \
+curl -X POST "https://your-instance/v1/check/headers?format=json" \
   -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"]}'
+  -d '{"target": "example.com"}'
 ```
 
 ### SARIF 2.1.0
@@ -144,9 +160,13 @@ curl -X POST "https://your-instance/v1/scan?format=json" \
 Produces [SARIF](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) output compatible with GitHub Code Scanning, VS Code SARIF Viewer, and other SARIF-consuming tools.
 
 ```bash
-curl -X POST "https://your-instance/v1/scan?format=sarif" \
+# On inline check
+curl -X POST "https://your-instance/v1/check/headers?format=sarif" \
   -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"]}'
+  -d '{"target": "example.com"}'
+
+# On completed job
+curl "https://your-instance/v1/scan/a1b2c3d4...?format=sarif"
 ```
 
 Severity mapping in SARIF:
@@ -164,59 +184,19 @@ Severity mapping in SARIF:
 One row per finding. Useful for spreadsheet analysis and reporting.
 
 ```bash
-curl -X POST "https://your-instance/v1/scan?format=csv" \
+curl -X POST "https://your-instance/v1/check/headers?format=csv" \
   -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"]}'
+  -d '{"target": "example.com"}'
 ```
 
 Columns: `target`, `check`, `severity`, `title`, `description`, `details`
 
-## Async Scans
-
-For long-running scans, use the async endpoint to avoid HTTP timeouts.
-
-### 1. Start the scan
-
-```bash
-curl -X POST https://your-instance/v1/scan/async \
-  -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"], "checks": ["headers", "ssl", "ports"]}'
-```
-
-Returns `202 Accepted` with a job ID:
-
-```json
-{
-  "job_id": "a1b2c3d4e5f6...",
-  "status": "pending",
-  "created_at": "2025-01-15T10:30:00Z"
-}
-```
-
-### 2. Poll for status
-
-```bash
-curl https://your-instance/v1/scan/a1b2c3d4e5f6...
-```
-
-Returns the job with its current status (`pending`, `running`, `completed`, or `failed`).
-
-### 3. Get results
-
-Once the job status is `completed`, fetch the report:
-
-```bash
-curl "https://your-instance/v1/scan/a1b2c3d4e5f6.../report?format=json"
-```
-
-This returns the same `ScanResponse` format as a synchronous scan. The `format` query parameter works here too.
-
-### Webhooks
+## Webhooks
 
 Instead of polling, provide a `webhook_url` to get results pushed to you:
 
 ```bash
-curl -X POST https://your-instance/v1/scan/async \
+curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{
     "targets": ["example.com"],

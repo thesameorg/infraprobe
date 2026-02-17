@@ -1,6 +1,6 @@
 # Authenticated Scanning
 
-InfraProbe can scan targets that sit behind authentication. Pass credentials via the optional `auth` field on any request body, and HTTP-based scanners (headers, tech, tech_deep, web) will include them in their requests. Non-HTTP scanners (ssl, dns, blacklist, ports, cve, whois) accept the field but ignore it.
+InfraProbe can scan targets that sit behind authentication. Pass credentials via the optional `auth` field on any request body, and HTTP-based scanners (headers, tech, web) will include them in their requests. Non-HTTP scanners (ssl, dns, blacklist, ports, cve, whois) accept the field but ignore it.
 
 ## Auth Types
 
@@ -62,7 +62,6 @@ curl -X POST https://your-instance/v1/scan \
 |---------|-----------|-------|
 | headers | Yes | Security headers on authenticated pages often differ |
 | tech | Yes | Tech fingerprints may differ behind auth |
-| tech_deep | Yes | Same as tech |
 | web | Yes | Path probes, CORS, robots.txt use auth via shared client |
 | ssl, ssl_deep | No | Direct TLS handshake, no HTTP layer |
 | dns, dns_deep | No | DNS protocol |
@@ -82,10 +81,7 @@ curl -X POST https://your-instance/v1/scan \
 The `auth` field is supported on every scan and check endpoint:
 
 - `POST /v1/scan` (bundle scan)
-- `POST /v1/check/{type}` and `POST /v1/check_deep/{type}` (single check)
-- `POST /v1/scan_domain` and `POST /v1/check_domain/{type}` (domain-specific)
-- `POST /v1/scan_ip` and `POST /v1/check_ip/{type}` (IP-specific)
-- `POST /v1/scan/async` (async scan)
+- `POST /v1/check/{type}` (single check)
 
 ---
 

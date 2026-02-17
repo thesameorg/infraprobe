@@ -11,43 +11,88 @@ from fastapi.responses import JSONResponse, Response
 
 from infraprobe.blocklist import (
     BlockedTargetError,
-    CapacityExceededError,
     InvalidTargetError,
-    validate_domain,
-    validate_ip,
     validate_target,
 )
-from infraprobe.config import nmap_semaphore, scan_semaphore, settings
+from infraprobe.config import scan_semaphore, settings
 from infraprobe.formatters.csv import scan_response_to_csv, target_result_to_csv
 from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
 from infraprobe.metrics import ACTIVE_SCANS, SCANNER_DURATION
 from infraprobe.models import (
     DNS_ONLY_CHECKS,
+    DOMAIN_CHECKS,
+    IP_CHECKS,
     AuthConfig,
     CheckResult,
     CheckType,
-    DomainScanRequest,
-    IpScanRequest,
     Job,
     JobCreate,
     JobStatus,
     OutputFormat,
     ScanRequest,
     ScanResponse,
+    Severity,
     SingleCheckRequest,
     TargetResult,
 )
 from infraprobe.storage.base import JobStore
-from infraprobe.target import ScanContext
+from infraprobe.target import ScanContext, parse_target
 from infraprobe.webhook import _validate_webhook_url, maybe_deliver_webhook
 
 router = APIRouter()
 logger = logging.getLogger("infraprobe.scanner")
 
 FormatParam = Annotated[OutputFormat, Query(alias="format")]
+FailOnParam = Annotated[str | None, Query(alias="fail_on")]
 
-# Scanner registry: maps check type → scan function
-# Each scanner is async def scan(target, timeout, auth) -> CheckResult
+# Severity ordering for fail_on threshold comparison
+_SEVERITY_RANK: dict[str, int] = {
+    Severity.CRITICAL: 0,
+    Severity.HIGH: 1,
+    Severity.MEDIUM: 2,
+    Severity.LOW: 3,
+    Severity.INFO: 4,
+}
+
+
+def _check_fail_on(result: ScanResponse | TargetResult, fail_on: str | None) -> JSONResponse | None:
+    """If fail_on is set and findings at or above threshold exist, return 422 response."""
+    if not fail_on:
+        return None
+
+    thresholds = {s.strip().lower() for s in fail_on.split(",")}
+    valid_severities = set(_SEVERITY_RANK.keys())
+    invalid = thresholds - valid_severities
+    if invalid:
+        return JSONResponse(
+            status_code=422,
+            content={"error": "invalid_parameter", "detail": f"Invalid fail_on severity: {', '.join(sorted(invalid))}"},
+        )
+
+    max_rank = max(_SEVERITY_RANK[s] for s in thresholds)
+
+    # Collect all findings
+    if isinstance(result, ScanResponse):
+        all_findings = [f for tr in result.results for cr in tr.results.values() for f in cr.findings]
+    else:
+        all_findings = [f for cr in result.results.values() for f in cr.findings]
+
+    exceeding = [f for f in all_findings if _SEVERITY_RANK.get(f.severity, 5) <= max_rank]
+    if exceeding:
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "threshold_exceeded",
+                "detail": f"Found {len(exceeding)} finding(s) at or above threshold",
+                "result": result.model_dump(mode="json"),
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
+# Scanner registry
+# ---------------------------------------------------------------------------
+
 type ScanFn = Callable[[str, float, AuthConfig | None], Coroutine[None, None, CheckResult]]
 
 _SCANNERS: dict[CheckType, ScanFn] = {}
@@ -57,8 +102,7 @@ def register_scanner(check_type: CheckType, fn: ScanFn) -> None:
     _SCANNERS[check_type] = fn
 
 
-# Small buffer for asyncio scheduling overhead; scanners should respect their
-# own timeout budget internally — this only covers task-switch latency.
+# Small buffer for asyncio scheduling overhead
 _SCHEDULING_BUFFER = 0.5
 
 
@@ -137,14 +181,15 @@ async def _run_scanner(
         return CheckResult(check=check_type, error=f"Scanner {check_type} failed: {exc}")
 
 
-_DEEP_CHECKS = frozenset({"ssl_deep", "tech_deep", "dns_deep", "blacklist_deep", "ports_deep", "cve"})
-_NMAP_CHECKS = frozenset({CheckType.PORTS, CheckType.PORTS_DEEP, CheckType.CVE})
+_DEEP_CHECKS = frozenset({"ssl_deep", "dns_deep", "blacklist_deep", "ports_deep", "cve"})
+
+# Slow checks return 202 from /check/{type} (nmap-based, long-running)
+_SLOW_CHECKS = frozenset({CheckType.PORTS, CheckType.PORTS_DEEP, CheckType.CVE})
 
 
-def _check_nmap_backpressure(checks: list[CheckType]) -> None:
-    """Raise CapacityExceededError if nmap slots are exhausted and request needs nmap."""
-    if _NMAP_CHECKS.intersection(checks) and nmap_semaphore()._value == 0:
-        raise CapacityExceededError("All nmap slots are in use. Retry later or use the async endpoint.")
+# ---------------------------------------------------------------------------
+# Scan orchestration
+# ---------------------------------------------------------------------------
 
 
 async def _scan_target(ctx: ScanContext, checks: list[CheckType], auth: AuthConfig | None = None) -> TargetResult:
@@ -200,20 +245,34 @@ def _format_target_result(result: TargetResult, fmt: OutputFormat) -> TargetResu
     return result
 
 
-# ---------------------------------------------------------------------------
-# Existing endpoints (backward-compatible)
-# ---------------------------------------------------------------------------
+def _resolve_checks(targets: list[str], checks: list[CheckType] | None) -> list[CheckType]:
+    """Resolve checks list: auto-detect from target types if None, validate if explicit."""
+    if checks is not None:
+        # Validate: reject DNS-only checks on IP targets
+        ip_targets = [t for t in targets if parse_target(t).is_ip]
+        if ip_targets:
+            dns_only = set(checks) & DNS_ONLY_CHECKS
+            if dns_only:
+                raise InvalidTargetError(
+                    f"DNS checks ({', '.join(sorted(str(c) for c in dns_only))}) "
+                    f"not applicable to IP targets: {', '.join(ip_targets)}"
+                )
+        return checks
+
+    # Auto-detect based on target types
+    has_ip = any(parse_target(t).is_ip for t in targets)
+    if has_ip:
+        return list(IP_CHECKS)
+    return list(DOMAIN_CHECKS)
 
 
 async def _run_scan_with_validator(
     targets: list[str],
     checks: list[CheckType],
-    validator: Callable[[str], ScanContext],
     auth: AuthConfig | None = None,
 ) -> ScanResponse:
-    """Shared orchestration for all scan endpoints (generic, domain, IP)."""
-    _check_nmap_backpressure(checks)
-    contexts = [validator(raw) for raw in targets]
+    """Shared orchestration: validate targets, run checks in parallel."""
+    contexts = [validate_target(raw) for raw in targets]
     check_names = [str(c) for c in checks]
     logger.info(
         "scan started: %d target(s) × %d checks [%s]",
@@ -246,147 +305,13 @@ async def _run_scan_with_validator(
 
 
 async def _run_full_scan(request: ScanRequest) -> ScanResponse:
-    return await _run_scan_with_validator(request.targets, request.checks, validate_target, request.auth)
-
-
-@router.post("/scan", tags=["Scans"])
-async def scan(
-    request: ScanRequest,
-    fmt: FormatParam = OutputFormat.JSON,
-) -> ScanResponse:
-    result = await _run_full_scan(request)
-    return _format_scan_response(result, fmt)
-
-
-async def _run_single_check(
-    check_type: CheckType,
-    target: str,
-    validator: Callable[[str], ScanContext],
-    auth: AuthConfig | None = None,
-) -> TargetResult:
-    """Shared orchestration for all single-check endpoints (generic, domain, IP)."""
-    ctx = validator(target)
-    timeout = settings.deep_scanner_timeout if check_type in _DEEP_CHECKS else settings.scanner_timeout
-    logger.info(
-        "check request: %s on %s (timeout=%.1fs, ips=%s)",
-        check_type,
-        target,
-        timeout,
-        list(ctx.resolved_ips),
-        extra={
-            "target": target,
-            "check": str(check_type),
-            "scanner_timeout": timeout,
-            "resolved_ips": list(ctx.resolved_ips),
-        },
-    )
-    start = time.monotonic()
-    result = await _scan_target(ctx, [check_type], auth)
-    duration_ms = int((time.monotonic() - start) * 1000)
-    logger.info(
-        "check request done: %s on %s in %dms",
-        check_type,
-        target,
-        duration_ms,
-        extra={
-            "target": target,
-            "check": str(check_type),
-            "duration_ms": duration_ms,
-        },
-    )
-    return result
-
-
-async def _single_check(check_type: CheckType, request: SingleCheckRequest) -> TargetResult:
-    _check_nmap_backpressure([check_type])
-    return await _run_single_check(check_type, request.target, validate_target, request.auth)
-
-
-def _make_check_handler(ct: CheckType):
-    async def handler(
-        request: SingleCheckRequest,
-        fmt: FormatParam = OutputFormat.JSON,
-    ) -> TargetResult:
-        result = await _single_check(ct, request)
-        return _format_target_result(result, fmt)
-
-    handler.__name__ = f"check_{ct.value}"
-    return handler
-
-
-# Register a dedicated route per check type so each appears as its own endpoint in OpenAPI.
-# Deep checks live under /check_deep/{name} (e.g. /check_deep/ssl), light checks under /check/{name}.
-for _ct in CheckType:
-    _handler = _make_check_handler(_ct)
-    if _ct.value.endswith("_deep"):
-        _slug = _ct.value.removesuffix("_deep")
-        router.add_api_route(
-            f"/check_deep/{_slug}", _handler, methods=["POST"], response_model=TargetResult, tags=["Deep Checks"]
-        )
-    else:
-        router.add_api_route(
-            f"/check/{_ct.value}", _handler, methods=["POST"], response_model=TargetResult, tags=["Checks"]
-        )
+    return await _run_scan_with_validator(request.targets, request.checks, request.auth)
 
 
 # ---------------------------------------------------------------------------
-# Domain-specific endpoints
+# Background task management
 # ---------------------------------------------------------------------------
 
-
-@router.post("/scan_domain", tags=["Scans"])
-async def scan_domain(
-    request: DomainScanRequest,
-    fmt: FormatParam = OutputFormat.JSON,
-) -> ScanResponse:
-    result = await _run_scan_with_validator(request.targets, request.checks, validate_domain, request.auth)
-    return _format_scan_response(result, fmt)
-
-
-@router.post("/check_domain/{check_type}", tags=["Checks"])
-async def check_domain(
-    check_type: CheckType,
-    request: SingleCheckRequest,
-    fmt: FormatParam = OutputFormat.JSON,
-) -> TargetResult:
-    result = await _run_single_check(check_type, request.target, validate_domain, request.auth)
-    return _format_target_result(result, fmt)
-
-
-# ---------------------------------------------------------------------------
-# IP-specific endpoints
-# ---------------------------------------------------------------------------
-
-
-@router.post("/scan_ip", tags=["Scans"])
-async def scan_ip(
-    request: IpScanRequest,
-    fmt: FormatParam = OutputFormat.JSON,
-) -> ScanResponse:
-    invalid = set(request.checks) & DNS_ONLY_CHECKS
-    if invalid:
-        raise InvalidTargetError(f"DNS checks not applicable to IP targets: {', '.join(sorted(invalid))}")
-    result = await _run_scan_with_validator(request.targets, request.checks, validate_ip, request.auth)
-    return _format_scan_response(result, fmt)
-
-
-@router.post("/check_ip/{check_type}", tags=["Checks"])
-async def check_ip(
-    check_type: CheckType,
-    request: SingleCheckRequest,
-    fmt: FormatParam = OutputFormat.JSON,
-) -> TargetResult:
-    if check_type in DNS_ONLY_CHECKS:
-        raise InvalidTargetError(f"Check type {check_type} not applicable to IP targets")
-    result = await _run_single_check(check_type, request.target, validate_ip, request.auth)
-    return _format_target_result(result, fmt)
-
-
-# ---------------------------------------------------------------------------
-# Async / polling endpoints
-# ---------------------------------------------------------------------------
-
-# Prevent GC of fire-and-forget tasks
 _background_tasks: set[asyncio.Task] = set()
 _shutting_down = False
 
@@ -446,14 +371,23 @@ async def _run_scan_job(
             )
 
 
-@router.post("/scan/async", status_code=202, response_model=JobCreate, tags=["Async Jobs"])
-async def scan_async(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
+# ---------------------------------------------------------------------------
+# POST /v1/scan — always async (202)
+# ---------------------------------------------------------------------------
+
+
+@router.post("/scan", status_code=202, response_model=JobCreate, tags=["Scans"])
+async def scan(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
     if _shutting_down:
         return JSONResponse(status_code=503, content={"error": "shutting_down", "detail": "Server is shutting down"})
 
     # Validate targets eagerly so 400/422 errors are returned synchronously
     for raw in request.targets:
         validate_target(raw)
+
+    # Resolve checks (auto-detect if None)
+    resolved_checks = _resolve_checks(request.targets, request.checks)
+    request = request.model_copy(update={"checks": resolved_checks})
 
     # Validate webhook URL (SSRF protection)
     webhook_url = request.webhook_url
@@ -477,27 +411,144 @@ async def scan_async(request: ScanRequest, req: Request) -> JobCreate | JSONResp
     return JobCreate(job_id=job.job_id, status=job.status, created_at=job.created_at)
 
 
-@router.get("/scan/{job_id}", response_model=Job, tags=["Async Jobs"])
-async def get_scan_job(job_id: str, req: Request) -> Job | JSONResponse:
-    store: JobStore = req.app.state.job_store
-    job = await store.get(job_id)
-    if job is None:
-        return JSONResponse(status_code=404, content={"error": "not_found", "detail": "Job not found"})
-    return job
+# ---------------------------------------------------------------------------
+# GET /v1/scan/{job_id} — poll + results in one (replaces /scan/{job_id}/report)
+# ---------------------------------------------------------------------------
 
 
-@router.get("/scan/{job_id}/report", response_model=None, tags=["Async Jobs"])
-async def get_scan_report(
+@router.get("/scan/{job_id}", response_model=None, tags=["Scans"])
+async def get_scan_job(
     job_id: str,
     req: Request,
     fmt: FormatParam = OutputFormat.JSON,
-):
+    fail_on: FailOnParam = None,
+) -> Job | JSONResponse | Response:
     store: JobStore = req.app.state.job_store
     job = await store.get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "not_found", "detail": "Job not found"})
-    if job.status != JobStatus.COMPLETED or job.result is None:
+
+    # Apply fail_on and format to completed results
+    if job.status == JobStatus.COMPLETED and job.result is not None:
+        fail_response = _check_fail_on(job.result, fail_on)
+        if fail_response:
+            return fail_response
+        if fmt != OutputFormat.JSON:
+            return _format_scan_response(job.result, fmt)
+
+    return job
+
+
+# ---------------------------------------------------------------------------
+# POST /v1/check/{type} — fast checks inline (200), slow checks async (202)
+# ---------------------------------------------------------------------------
+
+
+async def _run_single_check(
+    check_type: CheckType,
+    target: str,
+    auth: AuthConfig | None = None,
+) -> TargetResult:
+    """Run a single check against a target (inline)."""
+    ctx = validate_target(target)
+    timeout = settings.deep_scanner_timeout if check_type in _DEEP_CHECKS else settings.scanner_timeout
+    logger.info(
+        "check request: %s on %s (timeout=%.1fs, ips=%s)",
+        check_type,
+        target,
+        timeout,
+        list(ctx.resolved_ips),
+        extra={
+            "target": target,
+            "check": str(check_type),
+            "scanner_timeout": timeout,
+            "resolved_ips": list(ctx.resolved_ips),
+        },
+    )
+    start = time.monotonic()
+    result = await _scan_target(ctx, [check_type], auth)
+    duration_ms = int((time.monotonic() - start) * 1000)
+    logger.info(
+        "check request done: %s on %s in %dms",
+        check_type,
+        target,
+        duration_ms,
+        extra={
+            "target": target,
+            "check": str(check_type),
+            "duration_ms": duration_ms,
+        },
+    )
+    return result
+
+
+def _make_check_handler(ct: CheckType):
+    """Create an inline check handler (200) for fast checks."""
+
+    async def handler(
+        request: SingleCheckRequest,
+        fmt: FormatParam = OutputFormat.JSON,
+        fail_on: FailOnParam = None,
+    ) -> TargetResult | JSONResponse | Response:
+        # Reject DNS-only checks on IP targets
+        if ct in DNS_ONLY_CHECKS and parse_target(request.target).is_ip:
+            raise InvalidTargetError(f"Check type {ct} not applicable to IP targets")
+
+        result = await _run_single_check(ct, request.target, request.auth)
+
+        fail_response = _check_fail_on(result, fail_on)
+        if fail_response:
+            return fail_response
+
+        return _format_target_result(result, fmt)
+
+    handler.__name__ = f"check_{ct.value}"
+    return handler
+
+
+def _make_slow_check_handler(ct: CheckType):
+    """Create an async check handler (202) for slow (nmap-based) checks."""
+
+    async def handler(request: SingleCheckRequest, req: Request) -> JSONResponse:
+        if _shutting_down:
+            return JSONResponse(
+                status_code=503, content={"error": "shutting_down", "detail": "Server is shutting down"}
+            )
+
+        # Validate target eagerly
+        validate_target(request.target)
+
+        # Reject DNS-only checks on IP targets
+        if ct in DNS_ONLY_CHECKS and parse_target(request.target).is_ip:
+            raise InvalidTargetError(f"Check type {ct} not applicable to IP targets")
+
+        # Create a ScanRequest wrapping the single check
+        scan_req = ScanRequest(targets=[request.target], checks=[ct], auth=request.auth)
+
+        store: JobStore = req.app.state.job_store
+        job_id = uuid.uuid4().hex
+        job = await store.create(job_id, scan_req)
+
+        task = asyncio.create_task(_run_scan_job(store, job_id, scan_req))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
         return JSONResponse(
-            status_code=409, content={"error": "job_not_ready", "detail": f"Job is {job.status}", "job_id": job_id}
+            status_code=202,
+            content=JobCreate(job_id=job.job_id, status=job.status, created_at=job.created_at).model_dump(mode="json"),
         )
-    return _format_scan_response(job.result, fmt)
+
+    handler.__name__ = f"check_{ct.value}"
+    return handler
+
+
+# Register a dedicated route per check type under /check/{type}
+for _ct in CheckType:
+    if _ct in _SLOW_CHECKS:
+        _handler = _make_slow_check_handler(_ct)
+        router.add_api_route(f"/check/{_ct.value}", _handler, methods=["POST"], tags=["Checks"])
+    else:
+        _handler = _make_check_handler(_ct)
+        router.add_api_route(
+            f"/check/{_ct.value}", _handler, methods=["POST"], response_model=TargetResult, tags=["Checks"]
+        )

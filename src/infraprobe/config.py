@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     webhook_max_retries: int = Field(default=3, ge=0)
     max_concurrent_scans: int = Field(default=5, ge=1, le=50)
     nmap_max_concurrent: int = Field(default=6, ge=1, le=20)
+    job_store_backend: str = Field(default="memory", pattern=r"^(memory|firestore)$")
+    firestore_project: str | None = None
+    firestore_database: str | None = None
 
     model_config = {"env_prefix": "INFRAPROBE_", "env_file": ".env", "extra": "ignore"}
 

@@ -1,183 +1,123 @@
-import re
-from typing import Any
+"""Technology detection scanner powered by wappalyzer-next.
+
+Uses the official Wappalyzer fingerprint database (1,500+ technologies).
+Runs in 'fast' mode (single HTTP request, no browser dependency).
+We handle HTTP fetching ourselves (with proper timeouts) and feed the
+response to wappalyzer's analyze_from_response() directly.
+"""
+
+from __future__ import annotations
+
+import asyncio
 
 import httpx
 
 from infraprobe.http import fetch_with_fallback, scanner_client
 from infraprobe.models import CheckResult, CheckType, Finding, Severity
 
-# --- Detection patterns ---
-# Each entry: (technology_name, category, patterns_dict)
-# patterns_dict keys: "headers" (header_name: regex), "meta" (name_attr: regex on content),
-#                     "cookies" (cookie_name_regex), "html" (regex on body)
 
-_TECHNOLOGIES: list[tuple[str, str, dict[str, Any]]] = [
-    # --- Web servers ---
-    ("Nginx", "web-server", {"headers": {"server": r"nginx"}}),
-    ("Apache", "web-server", {"headers": {"server": r"apache"}}),
-    ("LiteSpeed", "web-server", {"headers": {"server": r"litespeed"}}),
-    ("IIS", "web-server", {"headers": {"server": r"microsoft-iis"}}),
-    ("Caddy", "web-server", {"headers": {"server": r"caddy"}}),
-    # --- CDN ---
-    ("Cloudflare", "cdn", {"headers": {"server": r"cloudflare", "cf-ray": r"."}}),
-    ("Fastly", "cdn", {"headers": {"x-served-by": r"cache-", "via": r"varnish"}}),
-    ("Akamai", "cdn", {"headers": {"x-akamai-transformed": r"."}}),
-    ("Amazon CloudFront", "cdn", {"headers": {"x-amz-cf-id": r".", "via": r"cloudfront"}}),
-    ("Vercel", "cdn", {"headers": {"x-vercel-id": r".", "server": r"vercel"}}),
-    # --- WAF ---
-    ("Cloudflare WAF", "waf", {"headers": {"cf-mitigated": r"."}}),
-    ("AWS WAF", "waf", {"headers": {"x-amzn-waf-action": r"."}}),
-    ("Sucuri", "waf", {"headers": {"x-sucuri-id": r".", "server": r"sucuri"}}),
-    # --- Frameworks / Languages ---
-    ("PHP", "language", {"headers": {"x-powered-by": r"php"}}),
-    ("ASP.NET", "framework", {"headers": {"x-powered-by": r"asp\.net", "x-aspnet-version": r"."}}),
-    ("Express", "framework", {"headers": {"x-powered-by": r"express"}}),
-    ("Django", "framework", {"headers": {"x-framework": r"django"}, "html": [r"csrfmiddlewaretoken"]}),
-    ("Ruby on Rails", "framework", {"headers": {"x-powered-by": r"phusion|rails"}, "html": [r"csrf-token"]}),
-    ("Next.js", "framework", {"headers": {"x-nextjs-cache": r".", "x-powered-by": r"next\.js"}}),
-    # --- CMS ---
-    (
-        "WordPress",
-        "cms",
-        {
-            "html": [r'<meta\s+name=["\']generator["\']\s+content=["\']WordPress', r"/wp-content/", r"/wp-includes/"],
-            "cookies": ["wordpress_", "wp-settings"],
-        },
-    ),
-    (
-        "Drupal",
-        "cms",
-        {
-            "headers": {"x-generator": r"drupal", "x-drupal-cache": r"."},
-            "html": [r'<meta\s+name=["\']Generator["\']\s+content=["\']Drupal'],
-        },
-    ),
-    (
-        "Joomla",
-        "cms",
-        {
-            "html": [r'<meta\s+name=["\']generator["\']\s+content=["\']Joomla'],
-            "cookies": ["joomla_"],
-        },
-    ),
-    ("Shopify", "ecommerce", {"headers": {"x-shopid": r"."}, "html": [r"cdn\.shopify\.com"]}),
-    ("Squarespace", "cms", {"html": [r"squarespace\.com", r"<!-- This is Squarespace"]}),
-    # --- Analytics / Tag managers ---
-    ("Google Analytics", "analytics", {"html": [r"google-analytics\.com/analytics\.js", r"gtag/js\?id=G-"]}),
-    ("Google Tag Manager", "analytics", {"html": [r"googletagmanager\.com/gtm\.js"]}),
-    # --- Caching ---
-    ("Varnish", "cache", {"headers": {"via": r"varnish", "x-varnish": r"."}}),
-    ("Redis", "cache", {"headers": {"x-cache-engine": r"redis"}}),
-]
+class _ResponseAdapter:
+    """Minimal adapter so httpx.Response satisfies wappalyzer's analyze_from_response."""
+
+    def __init__(self, resp: httpx.Response) -> None:
+        self.text = resp.text
+        self.url = str(resp.url)
+        self.headers = dict(resp.headers)
+        self._cookies = {k: v for k, v in resp.cookies.items()}
+        self.raw = None  # certIssuer parser accesses .raw but handles exceptions
+
+    class _CookieDict(dict):
+        def get_dict(self) -> dict:
+            return dict(self)
+
+    @property
+    def cookies(self) -> _CookieDict:
+        return self._CookieDict(self._cookies)
 
 
-def _detect(
-    headers_lower: dict[str, str],
-    body: str,
-    cookie_names: list[str],
-) -> list[dict[str, str]]:
-    """Run detection patterns against response data. Returns list of detected technologies."""
-    detected: list[dict[str, str]] = []
-    seen: set[str] = set()
+# CMS names that warrant a security finding
+_CMS_FINDINGS = frozenset({"WordPress", "Joomla", "Drupal", "Magento", "PrestaShop"})
 
-    for tech_name, category, patterns in _TECHNOLOGIES:
-        if tech_name in seen:
-            continue
 
-        matched = False
+def _analyze_response(adapted: _ResponseAdapter) -> dict:
+    """Run wappalyzer analysis on a pre-fetched response (called via asyncio.to_thread)."""
+    # Stub wappalyzer.browser before import — the browser subpackage (Selenium-based)
+    # is stripped from the Docker image to save ~60MB, but wappalyzer's __init__.py
+    # unconditionally imports from it.  We only use wappalyzer.core (HTTP-only analysis).
+    import sys
+    import types
 
-        # Header patterns
-        header_patterns: dict[str, str] = patterns.get("headers", {})
-        for header_name, regex in header_patterns.items():
-            value = headers_lower.get(header_name, "")
-            if value and re.search(regex, value, re.IGNORECASE):
-                matched = True
-                break
+    if "wappalyzer.browser" not in sys.modules:
+        _stub = types.ModuleType("wappalyzer.browser")
+        _stub.analyzer = types.ModuleType("wappalyzer.browser.analyzer")  # type: ignore[attr-defined]
+        _stub.analyzer.DriverPool = None  # type: ignore[attr-defined]
+        _stub.analyzer.cookie_to_cookies = None  # type: ignore[attr-defined]
+        _stub.analyzer.process_url = None  # type: ignore[attr-defined]
+        _stub.analyzer.merge_technologies = None  # type: ignore[attr-defined]
+        sys.modules["wappalyzer.browser"] = _stub
+        sys.modules["wappalyzer.browser.analyzer"] = _stub.analyzer  # type: ignore[attr-defined]
 
-        # HTML body patterns
-        if not matched:
-            html_patterns: list[str] = patterns.get("html", [])
-            for regex in html_patterns:
-                if re.search(regex, body, re.IGNORECASE):
-                    matched = True
-                    break
+    from wappalyzer.core.analyzer import analyze_from_response
+    from wappalyzer.core.utils import create_result
 
-        # Cookie patterns
-        if not matched:
-            cookie_patterns: list[str] = patterns.get("cookies", [])
-            for cookie_prefix in cookie_patterns:
-                if any(cookie_prefix.lower() in cn.lower() for cn in cookie_names):
-                    matched = True
-                    break
-
-        if matched:
-            seen.add(tech_name)
-            detected.append({"name": tech_name, "category": category})
-
-    return detected
+    techs = analyze_from_response(adapted, scan_type="fast")
+    return create_result(techs)
 
 
 async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     try:
         async with scanner_client(timeout, auth=auth) as client:
-            _, resp = await fetch_with_fallback(target, client)
+            url, resp = await fetch_with_fallback(target, client)
     except httpx.HTTPError as exc:
-        return CheckResult(check=CheckType.TECH, error=f"Cannot connect to {target}: {exc}")
+        return CheckResult(check=CheckType.TECH, error=f"Cannot analyze {target}: {exc}")
 
-    headers_lower = {k.lower(): v.lower() for k, v in resp.headers.items()}
-    body = resp.text[:200_000]  # Cap body size for pattern matching
-    cookie_names = list(resp.cookies.keys())
-
-    detected = _detect(headers_lower, body, cookie_names)
+    adapted = _ResponseAdapter(resp)
+    techs = await asyncio.to_thread(_analyze_response, adapted)
 
     findings: list[Finding] = []
+    detected: list[dict] = []
 
-    # Flag outdated/risky tech detections
-    for tech in detected:
-        name = tech["name"]
-        # Info-leak: server software version exposed via headers is already covered by headers scanner
-        # Here we flag tech that has security implications
-        if name == "WordPress":
+    for name, info in techs.items():
+        categories = info.get("categories", [])
+        version = info.get("version", "")
+        confidence = info.get("confidence", 0)
+        groups = info.get("groups", [])
+
+        detected.append(
+            {
+                "name": name,
+                "version": version,
+                "confidence": confidence,
+                "categories": categories,
+                "groups": groups,
+            }
+        )
+
+        # CMS detections
+        if name in _CMS_FINDINGS:
             findings.append(
                 Finding(
                     severity=Severity.INFO,
-                    title="WordPress detected",
-                    description="WordPress CMS detected. Ensure core, themes, and plugins are up to date.",
-                    details=tech,
+                    title=f"{name} detected",
+                    description=f"{name} CMS detected. Ensure core and extensions are up to date.",
+                    details={"technology": name, "version": version},
                 )
             )
-        elif name == "Joomla":
-            findings.append(
-                Finding(
-                    severity=Severity.INFO,
-                    title="Joomla detected",
-                    description="Joomla CMS detected. Ensure core and extensions are up to date.",
-                    details=tech,
-                )
-            )
-        elif name == "Drupal":
-            findings.append(
-                Finding(
-                    severity=Severity.INFO,
-                    title="Drupal detected",
-                    description="Drupal CMS detected. Ensure core and modules are up to date.",
-                    details=tech,
-                )
-            )
-        elif name == "PHP":
+
+        # Version exposure
+        if version and any(cat in ("Programming languages", "Web servers") for cat in categories):
             findings.append(
                 Finding(
                     severity=Severity.LOW,
-                    title="PHP version exposed",
-                    description="PHP detected via X-Powered-By header. Version exposure aids attackers.",
-                    details=tech,
+                    title=f"{name} version exposed",
+                    description=f"{name} version '{version}' detected. Version exposure aids attackers.",
+                    details={"technology": name, "version": version},
                 )
             )
 
-    # Positive findings for security-relevant tech
-    categories_seen = {t["category"] for t in detected}
-    if "cdn" in categories_seen:
-        cdn_names = [t["name"] for t in detected if t["category"] == "cdn"]
+    # --- Positive findings for security-relevant tech ---
+    cdn_names = [t["name"] for t in detected if any("cdn" in str(c).lower() for c in t.get("categories", []))]
+    if cdn_names:
         findings.append(
             Finding(
                 severity=Severity.INFO,
@@ -185,8 +125,13 @@ async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
                 description="A CDN provides DDoS protection and improved performance.",
             )
         )
-    if "waf" in categories_seen:
-        waf_names = [t["name"] for t in detected if t["category"] == "waf"]
+
+    waf_names = [
+        t["name"]
+        for t in detected
+        if any("firewall" in str(c).lower() or "waf" in str(c).lower() for c in t.get("categories", []))
+    ]
+    if waf_names:
         findings.append(
             Finding(
                 severity=Severity.INFO,
@@ -196,7 +141,7 @@ async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
         )
 
     raw = {
-        "url": str(resp.url),
+        "url": url,
         "detected": detected,
         "technologies_count": len(detected),
     }

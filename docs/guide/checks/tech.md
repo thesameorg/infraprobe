@@ -1,16 +1,16 @@
 # Technology Detection Check
 
-Identifies web technologies, frameworks, CDNs, and WAFs running on the target.
+Identifies web technologies, frameworks, CDNs, and WAFs running on the target using the Wappalyzer fingerprint database.
 
-- **Check type:** `tech` (light), `tech_deep` (deep)
-- **Endpoint:** `POST /v1/check/tech` or `POST /v1/check_deep/tech_deep`
+- **Check type:** `tech`
+- **Endpoint:** `POST /v1/check/tech`
 - **Default:** Yes (all targets)
 
 ## What Is Checked
 
-### Light scan
+Uses the Wappalyzer fingerprint database with 1500+ technology signatures. Detects technologies via HTTP response headers, HTML body patterns, cookies, and JavaScript. Provides version numbers and confidence scores when available.
 
-Detects technologies using HTTP response headers, HTML body patterns, and cookies. Covers 30+ technologies including:
+Categories include:
 
 - **Web servers:** Nginx, Apache, LiteSpeed, IIS, Caddy
 - **CDNs:** Cloudflare, Fastly, Akamai, CloudFront, Vercel
@@ -19,10 +19,6 @@ Detects technologies using HTTP response headers, HTML body patterns, and cookie
 - **CMS:** WordPress, Drupal, Joomla, Shopify, Squarespace
 - **Analytics:** Google Analytics, Google Tag Manager
 - **Caching:** Varnish, Redis
-
-### Deep scan
-
-Uses the Wappalyzer fingerprint database with 1500+ technology signatures. Provides version numbers and confidence scores when available.
 
 ## Understanding Findings
 
@@ -33,21 +29,7 @@ Uses the Wappalyzer fingerprint database with 1500+ technology signatures. Provi
 
 Technology detection primarily produces informational findings. Version exposure findings are flagged as low severity because they help attackers identify specific vulnerabilities.
 
-### Deep scan additions
-
-The deep scan detects more technologies and includes version numbers and confidence scores. Findings follow the same severity pattern.
-
 ## Raw Data Fields
-
-### Light scan
-
-| Field | Description |
-|-------|-------------|
-| `url` | URL that was checked |
-| `detected` | List of detected technologies, each with `name` and `category` |
-| `technologies_count` | Total number of technologies detected |
-
-### Deep scan
 
 | Field | Description |
 |-------|-------------|

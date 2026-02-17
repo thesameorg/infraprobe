@@ -13,7 +13,7 @@ Every scanner is a single async function:
 async def scan(target: str, timeout: float, auth=None) -> CheckResult
 ```
 
-The `auth` parameter is an `AuthConfig | None` (see `models.py`). HTTP-based scanners (headers, tech, tech_deep, web) pass it to `scanner_client(timeout, auth=auth)`. Non-HTTP scanners accept the parameter but ignore it.
+The `auth` parameter is an `AuthConfig | None` (see `models.py`). HTTP-based scanners (headers, tech, web) pass it to `scanner_client(timeout, auth=auth)`. Non-HTTP scanners accept the parameter but ignore it.
 
 The `target` string is the normalized host (or host:port). A `ScanContext` (from `infraprobe.target`) is available in the orchestrator with pre-resolved IPs and `is_ip` flag, but scanners receive the target as a plain string.
 
@@ -46,7 +46,7 @@ Request timeout (uvicorn/Cloud Run: 300s)
 | Constant | Value | Location | Purpose |
 |----------|-------|----------|---------|
 | `settings.scanner_timeout` | `10.0s` | `config.py` | Per-scanner budget for light checks |
-| `settings.deep_scanner_timeout` | `30.0s` | `config.py` | Per-scanner budget for deep checks (`ssl_deep`, `dns_deep`, `tech_deep`) |
+| `settings.deep_scanner_timeout` | `30.0s` | `config.py` | Per-scanner budget for deep checks (`ssl_deep`, `dns_deep`, `blacklist_deep`, `ports_deep`, `cve`) |
 | `_SCHEDULING_BUFFER` | `0.5s` | `api/scan.py` | Buffer for asyncio task-switch latency only |
 
 **Rules:**
@@ -86,7 +86,7 @@ Scanners must handle their own errors. The orchestrator provides a safety net bu
 6. Add integration test in `tests/test_scan.py` against a real target
 
 What you don't need to change:
-- `api/scan.py` — handles any registered scanner automatically. Individual endpoints (`/v1/check/{type}` for light, `/v1/check_deep/{type}` for deep) are generated from `CheckType` at import time, so new enum values get their own route automatically.
+- `api/scan.py` — handles any registered scanner automatically. Individual endpoints (`/v1/check/{type}`) are generated from `CheckType` at import time, so new enum values get their own route automatically. Fast checks return 200 inline; slow checks (ports, ports_deep, cve) return 202 with a job ID.
 
 ---
 

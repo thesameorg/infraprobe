@@ -6,19 +6,19 @@ Technical architecture for InfraProbe. Covers system design, component structure
 
 ## System Overview
 
-InfraProbe is a stateless HTTP API that runs security checks against infrastructure targets. Two endpoint styles exist under `/v1`:
+InfraProbe is an HTTP API that runs security checks against infrastructure targets. Three endpoint styles exist under `/v1`:
 
-- **`POST /v1/scan`** — bundle endpoint. Accepts one or more targets and check types, executes all checks concurrently, and returns a `ScanResponse`.
-- **`POST /v1/check/{type}`** — light scanner endpoints (e.g. `/v1/check/headers`). Accepts a single target, runs one scanner, returns a `TargetResult`.
-- **`POST /v1/check_deep/{type}`** — deep scanner endpoints (e.g. `/v1/check_deep/ssl`). Same contract as light checks. Each is a separate route in OpenAPI for per-endpoint RapidAPI monetization.
+- **`POST /v1/scan`** — bundle endpoint. Always async (202). Accepts one or more targets, auto-detects or accepts explicit check types, runs all checks concurrently in the background. Poll via `GET /v1/scan/{job_id}` for results.
+- **`POST /v1/check/{type}`** — single check per endpoint (e.g. `/v1/check/headers`, `/v1/check/ssl_deep`). Fast checks return 200 inline; slow checks (ports, ports_deep, cve) return 202 with a job ID.
+- **`GET /v1/scan/{job_id}`** — poll for job status and results. Supports `?format=` and `?fail_on=` query parameters on completed jobs.
 
-There is no persistent storage, no background processing, and no inter-request state. No unversioned routes — all access goes through `/v1`.
+Background jobs use an in-memory `JobStore` (swappable to Firestore). No unversioned routes — all access goes through `/v1`.
 
 ```
 Client
   │
   │  POST /v1/scan {targets, checks}     — or —
-  │  POST /v1/check/headers {target}  or  /v1/check_deep/ssl {target}
+  │  POST /v1/check/headers {target}
   ▼
 ┌──────────────────────────────────────────────────┐
 │  FastAPI (ASGI)                                  │
@@ -60,12 +60,12 @@ src/infraprobe/
 ├── blocklist.py        # SSRF protection: block private/reserved IPs (urllib.parse-based)
 ├── http.py             # Shared HTTP client (scanner_client, fetch_with_fallback)
 ├── api/
-│   └── scan.py         # POST /v1/scan + /v1/check/ + /v1/check_deep/, orchestrator, scanner registry
+│   └── scan.py         # POST /v1/scan + /v1/check/{type} + GET /v1/scan/{job_id}, orchestrator, scanner registry
 └── scanners/
     ├── headers_drheader.py  # HTTP security headers check (drheaderplus)
     ├── ssl.py          # SSL/TLS certificate and cipher check
     ├── dns.py          # DNS security records check
-    ├── tech.py         # Technology detection (lightweight)
+    ├── tech.py         # Technology detection (Wappalyzer)
     ├── blacklist.py    # DNSBL blacklist check (light: 2 zones, deep: 15 zones)
     ├── web.py          # Web security (CORS, exposed paths, mixed content, robots.txt, security.txt)
     ├── whois_scanner.py # WHOIS domain registration and expiry
@@ -73,8 +73,7 @@ src/infraprobe/
     ├── cve.py          # CVE vulnerability scanning (nmap + NVD API)
     └── deep/
         ├── ssl.py      # Deep SSL/TLS scan (SSLyze)
-        ├── dns.py      # Deep DNS scan (checkdmarc)
-        └── tech.py     # Deep tech detection (Wappalyzer)
+        └── dns.py      # Deep DNS scan (checkdmarc)
 
 scripts/
 └── verify_deploy.py    # Deployment verification — hits every endpoint, reports pass/fail
@@ -98,22 +97,30 @@ Lifespan manages graceful shutdown: `drain_background_tasks(timeout=25)` waits f
 
 ### Orchestrator (`api/scan.py`)
 
-Owns the full lifecycle of a scan request. Serves two endpoint styles:
+Owns the full lifecycle of a scan request. Serves three endpoint styles:
 
-**Bundle (`POST /scan`):**
+**Bundle (`POST /scan` — always 202):**
 1. Validate and parse `ScanRequest` (Pydantic)
-2. Resolve and validate each target through `blocklist.validate_target()` — rejects private IPs (SSRF protection) and unresolvable domains. Validation errors propagate as exceptions and are caught by global exception handlers in `app.py`.
-3. Fan out: `asyncio.gather` over targets, then `asyncio.gather` over checks per target
-4. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + SCHEDULING_BUFFER)` — the single timeout enforcement point
-5. Collect all `CheckResult`s, return `ScanResponse`
+2. Resolve checks: auto-detect from target type if `checks` is omitted, validate DNS-only checks against IP targets
+3. Validate each target through `blocklist.validate_target()` — rejects private IPs (SSRF protection) and unresolvable domains
+4. Create a job in the `JobStore`, spawn a background task via `asyncio.create_task`
+5. Background task fans out: `asyncio.gather` over targets, then `asyncio.gather` over checks per target
+6. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + SCHEDULING_BUFFER)` — the single timeout enforcement point
 
-**Individual (`POST /check/{type}` and `POST /check_deep/{type}`):**
+**Individual fast checks (`POST /check/{type}` — 200 inline):**
 1. Validate and parse `SingleCheckRequest` (single target)
 2. Same target validation and scanner dispatch as bundle, but runs one check type
 3. Returns `TargetResult` directly (not wrapped in `ScanResponse`)
-4. Routes are generated at import time by looping over `CheckType` enum — light checks get `/check/{name}`, deep checks get `/check_deep/{name}` (with `_deep` suffix stripped from the URL slug)
 
-The orchestrator is scanner-agnostic. It dispatches by `CheckType` to whatever function was registered. Adding a scanner requires no changes here.
+**Individual slow checks (`POST /check/{type}` for ports, ports_deep, cve — 202 async):**
+1. Same validation as fast checks
+2. Creates a job and background task, returns 202 with job ID
+
+**Poll (`GET /scan/{job_id}`):**
+1. Returns full `Job` with status, request, and result (when completed)
+2. Supports `?format=sarif|csv` on completed jobs and `?fail_on=high,critical` for CI/CD gating
+
+Routes are generated at import time by looping over `CheckType` enum — each value gets a `/check/{name}` route. The orchestrator is scanner-agnostic: it dispatches by `CheckType` to whatever function was registered. Adding a scanner requires no changes here.
 
 ### Scanner Registry
 
@@ -160,27 +167,33 @@ SSRF protection layer. Called before any scanner runs.
 ```
 ScanRequest                         SingleCheckRequest
 ├── targets: list[TargetStr] (1-10)  └── target: TargetStr (max 2048 chars)
-└── checks: list[CheckType]
+├── checks: list[CheckType] | None   (None = auto-detect)
+├── webhook_url: str | None
+├── webhook_secret: str | None (excluded from dumps)
+└── auth: AuthConfig | None (excluded from dumps)
 
 ScanResponse                   TargetResult
-└── results: list[TargetResult] ├── target: str
-                               ├── results: dict[str, CheckResult]
-CheckResult                    └── duration_ms: int
+├── results: list[TargetResult] ├── target: str
+└── summary: SeveritySummary   ├── results: dict[str, CheckResult]
+                               ├── duration_ms: int
+CheckResult                    └── summary: SeveritySummary
 ├── check: CheckType
-├── findings: list[Finding]
-├── raw: dict[str, Any]
-└── error: str | None
+├── findings: list[Finding]     SeveritySummary
+├── raw: dict[str, Any]         ├── critical/high/medium/low/info: int
+└── error: str | None           └── total: int
 
-Finding
-├── severity: Severity
-├── title: str
-├── description: str
-└── details: dict[str, Any]
+Finding                        Job
+├── severity: Severity          ├── job_id: str
+├── title: str                  ├── status: JobStatus (pending/running/completed/failed)
+├── description: str            ├── created_at/updated_at: datetime
+└── details: dict[str, Any]     ├── request: ScanRequest
+                                ├── result: ScanResponse | None
+                                └── error: str | None
 ```
 
-Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, tech_deep, blacklist, blacklist_deep, web, whois, ports, ports_deep, cve).
+Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, blacklist, blacklist_deep, web, whois, ports, ports_deep, cve).
 
-`POST /v1/scan` uses `ScanRequest` → `ScanResponse`. `POST /v1/check/{type}` and `POST /v1/check_deep/{type}` use `SingleCheckRequest` → `TargetResult`.
+`POST /v1/scan` uses `ScanRequest` → `JobCreate` (202), poll via `GET /v1/scan/{job_id}` → `Job` with `ScanResponse` result. `POST /v1/check/{type}` uses `SingleCheckRequest` → `TargetResult` (200 fast) or `JobCreate` (202 slow).
 
 `CheckResult.error` is the discriminator: if null, `findings` and `raw` are valid. If set, the scanner failed and `findings` is empty.
 
@@ -209,7 +222,7 @@ Max concurrency for bundle: 10 targets x 8 check types = 80 tasks. Individual ch
 
 **Scan semaphore:** A global `asyncio.Semaphore` (from `config.scan_semaphore()`, default 5) limits concurrent `_scan_target()` calls to prevent event loop starvation under load. Multi-target scans acquire/release slots per target independently.
 
-**Nmap semaphore:** Port and CVE scanners spawn nmap subprocesses via `asyncio.to_thread`. A shared `asyncio.Semaphore` (from `config.nmap_semaphore()`, default 6) limits concurrent nmap processes to prevent OOM under load. Sync endpoints return 429 `too_many_requests` when all nmap slots are in use (backpressure); async endpoints accept and queue.
+**Nmap semaphore:** Port and CVE scanners spawn nmap subprocesses via `asyncio.to_thread`. A shared `asyncio.Semaphore` (from `config.nmap_semaphore()`, default 6) limits concurrent nmap processes to prevent OOM under load. All nmap-based checks are async (202), so they queue and wait for slots.
 
 Total latency per request ≈ `max(scanner_timeout)` + scheduling overhead, not the sum.
 
@@ -239,7 +252,7 @@ All error responses use a consistent shape: `{"error": "<code>", "detail": "<mes
 | Auth rejected | Whole request | 403 | `forbidden` | RapidAPI middleware |
 | Capacity exceeded | Whole request | 429 | `too_many_requests` | Global exception handler |
 | Job not found | Single job | 404 | `not_found` | Inline JSONResponse |
-| Job not ready | Single job | 409 | `job_not_ready` | Inline JSONResponse |
+| Threshold exceeded | Completed job | 422 | `threshold_exceeded` | `fail_on` query param |
 | Shutting down | Async scan | 503 | `shutting_down` | Graceful shutdown flag |
 | Unhandled error | Whole request | 500 | `internal_error` | Catch-all handler |
 | Scanner not registered | Single check | 200 | — | `CheckResult(error=...)` |
@@ -294,9 +307,9 @@ Local dev: `docker-compose.yaml` mounts source as volume, enables `--reload`, ma
 
 **Deployed:** Live on Google Cloud Run. URL stored in `.envs/deployed.url`, RapidAPI proxy secret in `.envs/rapidapi_proxy_secret.txt`. CI/CD pipeline pushes on every `main` merge.
 
-**Deployment verification:** `scripts/verify_deploy.py` tests all endpoints against a live instance — health, every light and deep scanner, bundle/domain/IP scans, async job flow (submit → poll → report), output formats (JSON, SARIF, CSV), error handling (SSRF block, validation), and auth enforcement. Reads URL and secret from `.envs/` by default; also supports `uv run python scripts/verify_deploy.py http://localhost:8080` for local dev.
+**Deployment verification:** `scripts/verify_deploy.py` tests all endpoints against a live instance — health, every scanner (fast inline + slow async), bundle scan (submit → poll), target auto-detection, output formats (JSON, SARIF, CSV), error handling (SSRF block, validation), and auth enforcement. Reads URL and secret from `.envs/` by default; also supports `uv run python scripts/verify_deploy.py http://localhost:8080` for local dev.
 
-**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `tech_deep`, `blacklist`, `blacklist_deep`, `web`, `whois`, `ports`, `ports_deep`, `cve` — all registered and accessible via both bundle and individual endpoints. `web`, `ports`, `ports_deep`, and `cve` are opt-in (not in default checks).
+**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `blacklist`, `blacklist_deep`, `web`, `whois`, `ports`, `ports_deep`, `cve` — all registered and accessible via bundle and individual endpoints. `web`, `ports`, `ports_deep`, and `cve` are opt-in (not in default checks).
 
 **Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
 
@@ -313,7 +326,7 @@ Production robustness measures implemented:
 - **Consistent error shapes:** All error responses use `{"error": "<code>", "detail": "<message>"}`. Catch-all `Exception` handler returns 500 `internal_error`.
 - **Job store hardening:** `asyncio.Lock` protects all `_jobs` dict access. Cleanup loop wrapped in `try/except` with `logger.exception()`. TTL expiration based on `updated_at` (not `created_at`) so active jobs aren't prematurely evicted.
 - **Scan concurrency:** `asyncio.Semaphore` (configurable, default 5) limits concurrent `_scan_target()` calls to prevent event loop starvation under load.
-- **Nmap concurrency:** `asyncio.Semaphore` (configurable, default 6) limits concurrent nmap processes in port and CVE scanners to prevent OOM. Sync endpoints return 429 when all slots are in use (backpressure).
+- **Nmap concurrency:** `asyncio.Semaphore` (configurable, default 6) limits concurrent nmap processes in port and CVE scanners to prevent OOM. All nmap checks are async, so they queue and wait for slots.
 - **Readiness probe:** `GET /health/ready` checks cleanup task is alive, returns 503 if not. Separate from liveness (`GET /health`).
 - **Graceful shutdown:** Lifespan shutdown drains in-flight background tasks (25s timeout) before stopping cleanup loop. New async scan requests during shutdown return 503.
 - **Prometheus metrics:** `GET /metrics` exposes request count/duration, scanner duration, and active scan gauges. Compatible with Cloud Run metrics scraping and any Prometheus-compatible collector.

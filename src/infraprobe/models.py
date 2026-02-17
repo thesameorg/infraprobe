@@ -28,7 +28,6 @@ class CheckType(StrEnum):
     DNS = "dns"
     DNS_DEEP = "dns_deep"
     TECH = "tech"
-    TECH_DEEP = "tech_deep"
     BLACKLIST = "blacklist"
     BLACKLIST_DEEP = "blacklist_deep"
     WEB = "web"
@@ -58,9 +57,6 @@ IP_CHECKS: list[CheckType] = [
 
 # Checks that require a domain name (not applicable to IP targets)
 DNS_ONLY_CHECKS: frozenset[CheckType] = frozenset({CheckType.DNS, CheckType.DNS_DEEP, CheckType.WHOIS})
-
-# Backward-compatible alias
-LIGHT_CHECKS = DOMAIN_CHECKS
 
 
 class Finding(BaseModel):
@@ -126,32 +122,62 @@ class SingleCheckRequest(BaseModel):
 
 class ScanRequest(BaseModel):
     targets: list[TargetStr] = Field(min_length=1, max_length=10)
-    checks: list[CheckType] = Field(default_factory=lambda: list(LIGHT_CHECKS))
+    checks: list[CheckType] | None = None  # None = auto-detect based on target type
     webhook_url: Annotated[str, Field(max_length=2048)] | None = None
     webhook_secret: str | None = Field(default=None, exclude=True)
     auth: AuthConfig | None = Field(default=None, exclude=True)
 
 
-class DomainScanRequest(BaseModel):
-    targets: list[TargetStr] = Field(min_length=1, max_length=10)
-    checks: list[CheckType] = Field(default_factory=lambda: list(DOMAIN_CHECKS))
-    auth: AuthConfig | None = Field(default=None, exclude=True)
+class SeveritySummary(BaseModel):
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    info: int = 0
+    total: int = 0
 
 
-class IpScanRequest(BaseModel):
-    targets: list[TargetStr] = Field(min_length=1, max_length=10)
-    checks: list[CheckType] = Field(default_factory=lambda: list(IP_CHECKS))
-    auth: AuthConfig | None = Field(default=None, exclude=True)
+def _compute_summary(findings: list[Finding]) -> SeveritySummary:
+    counts: dict[str, int] = {}
+    for f in findings:
+        counts[f.severity] = counts.get(f.severity, 0) + 1
+    return SeveritySummary(
+        critical=counts.get(Severity.CRITICAL, 0),
+        high=counts.get(Severity.HIGH, 0),
+        medium=counts.get(Severity.MEDIUM, 0),
+        low=counts.get(Severity.LOW, 0),
+        info=counts.get(Severity.INFO, 0),
+        total=len(findings),
+    )
 
 
 class TargetResult(BaseModel):
     target: str
     results: dict[str, CheckResult]
     duration_ms: int
+    summary: SeveritySummary = Field(default_factory=SeveritySummary)
+
+    @model_validator(mode="after")
+    def _compute_target_summary(self) -> "TargetResult":
+        all_findings: list[Finding] = []
+        for check_result in self.results.values():
+            all_findings.extend(check_result.findings)
+        self.summary = _compute_summary(all_findings)
+        return self
 
 
 class ScanResponse(BaseModel):
     results: list[TargetResult]
+    summary: SeveritySummary = Field(default_factory=SeveritySummary)
+
+    @model_validator(mode="after")
+    def _compute_scan_summary(self) -> "ScanResponse":
+        all_findings: list[Finding] = []
+        for target_result in self.results:
+            for check_result in target_result.results.values():
+                all_findings.extend(check_result.findings)
+        self.summary = _compute_summary(all_findings)
+        return self
 
 
 # ---------------------------------------------------------------------------
