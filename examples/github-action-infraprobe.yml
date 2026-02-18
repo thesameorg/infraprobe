@@ -1,0 +1,151 @@
+# InfraProbe Security Scan — GitHub Actions Workflow
+#
+# Scans your infrastructure on every push/PR and uploads findings
+# as SARIF to GitHub Code Scanning. Optionally fails the build
+# when high/critical findings are detected.
+#
+# Setup:
+#   1. Get an API key from RapidAPI (https://rapidapi.com)
+#   2. Add these repository secrets:
+#      - RAPIDAPI_KEY: your RapidAPI subscription key
+#   3. Copy this file to .github/workflows/infraprobe.yml
+#   4. Set SCAN_TARGETS to your domain(s)
+
+name: InfraProbe Security Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly scan every Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
+
+env:
+  INFRAPROBE_BASE_URL: https://infraprobe.p.rapidapi.com
+  # Space-separated list of targets to scan
+  SCAN_TARGETS: "example.com"
+  # Fail the build if findings at these severities exist (comma-separated)
+  # Options: critical, high, medium, low, info
+  FAIL_ON: "critical,high"
+
+jobs:
+  security-scan:
+    name: Infrastructure Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write  # Required for SARIF upload
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Submit scan
+        id: submit
+        run: |
+          # Build targets JSON array
+          TARGETS_JSON=$(echo "$SCAN_TARGETS" | tr ' ' '\n' | jq -R . | jq -s .)
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "$INFRAPROBE_BASE_URL/v1/scan" \
+            -H "Content-Type: application/json" \
+            -H "X-RapidAPI-Key: ${{ secrets.RAPIDAPI_KEY }}" \
+            -H "X-RapidAPI-Host: infraprobe.p.rapidapi.com" \
+            -d "{\"targets\": $TARGETS_JSON}")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" != "202" ]; then
+            echo "Scan submission failed (HTTP $HTTP_CODE): $BODY"
+            exit 1
+          fi
+
+          JOB_ID=$(echo "$BODY" | jq -r '.job_id')
+          echo "job_id=$JOB_ID" >> "$GITHUB_OUTPUT"
+          echo "Scan submitted: job_id=$JOB_ID"
+
+      - name: Poll for results
+        id: poll
+        run: |
+          JOB_ID="${{ steps.submit.outputs.job_id }}"
+          MAX_ATTEMPTS=60  # 5 minutes max (60 x 5s)
+
+          for i in $(seq 1 $MAX_ATTEMPTS); do
+            RESPONSE=$(curl -s \
+              "$INFRAPROBE_BASE_URL/v1/scan/$JOB_ID" \
+              -H "X-RapidAPI-Key: ${{ secrets.RAPIDAPI_KEY }}" \
+              -H "X-RapidAPI-Host: infraprobe.p.rapidapi.com")
+
+            STATUS=$(echo "$RESPONSE" | jq -r '.status')
+
+            if [ "$STATUS" = "completed" ]; then
+              echo "Scan completed"
+              echo "$RESPONSE" > scan-result.json
+              # Extract score for summary
+              SCORE=$(echo "$RESPONSE" | jq -r '.result.summary.score // "N/A"')
+              echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+              break
+            elif [ "$STATUS" = "failed" ]; then
+              echo "Scan failed"
+              echo "$RESPONSE" | jq .
+              exit 1
+            fi
+
+            echo "Status: $STATUS (attempt $i/$MAX_ATTEMPTS)"
+            sleep 5
+          done
+
+          if [ ! -f scan-result.json ]; then
+            echo "Scan timed out after $MAX_ATTEMPTS attempts"
+            exit 1
+          fi
+
+      - name: Download SARIF report
+        run: |
+          JOB_ID="${{ steps.submit.outputs.job_id }}"
+
+          curl -s \
+            "$INFRAPROBE_BASE_URL/v1/scan/$JOB_ID?format=sarif" \
+            -H "X-RapidAPI-Key: ${{ secrets.RAPIDAPI_KEY }}" \
+            -H "X-RapidAPI-Host: infraprobe.p.rapidapi.com" \
+            -o infraprobe.sarif
+
+          echo "SARIF report saved to infraprobe.sarif"
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: infraprobe.sarif
+          category: infraprobe
+
+      - name: Check severity threshold
+        if: env.FAIL_ON != ''
+        run: |
+          JOB_ID="${{ steps.submit.outputs.job_id }}"
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "$INFRAPROBE_BASE_URL/v1/scan/$JOB_ID?fail_on=$FAIL_ON" \
+            -H "X-RapidAPI-Key: ${{ secrets.RAPIDAPI_KEY }}" \
+            -H "X-RapidAPI-Host: infraprobe.p.rapidapi.com")
+
+          if [ "$HTTP_CODE" = "422" ]; then
+            echo "::error::Security findings exceed threshold (fail_on=$FAIL_ON)"
+            echo "Score: ${{ steps.poll.outputs.score }}/100"
+            exit 1
+          fi
+
+          echo "No findings above threshold. Score: ${{ steps.poll.outputs.score }}/100"
+
+      - name: Scan summary
+        if: always()
+        run: |
+          if [ -f scan-result.json ]; then
+            echo "## InfraProbe Scan Results" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Score: ${{ steps.poll.outputs.score }}/100**" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "| Severity | Count |" >> "$GITHUB_STEP_SUMMARY"
+            echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+            jq -r '.result.summary | "| Critical | \(.critical) |\n| High | \(.high) |\n| Medium | \(.medium) |\n| Low | \(.low) |\n| Info | \(.info) |\n| **Total** | **\(.total)** |"' scan-result.json >> "$GITHUB_STEP_SUMMARY"
+          fi

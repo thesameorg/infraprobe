@@ -73,13 +73,13 @@ def _parse_ip_strict(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address
     return ipaddress.ip_address(host)
 
 
-def validate_target(raw: str) -> ScanContext:
+async def validate_target(raw: str) -> ScanContext:
     """Validate and normalize a scan target. Returns ScanContext with pre-resolved IPs.
 
     Raises BlockedTargetError for private/reserved IPs, InvalidTargetError for
     unresolvable domains or unparseable targets.
     """
-    ctx = build_context(raw)
+    ctx = await build_context(raw)
 
     for ip_str in ctx.resolved_ips:
         try:
@@ -94,17 +94,17 @@ def validate_target(raw: str) -> ScanContext:
     return ctx
 
 
-def validate_domain(raw: str) -> ScanContext:
+async def validate_domain(raw: str) -> ScanContext:
     """Validate that target is a domain (not an IP). Returns ScanContext."""
-    ctx = validate_target(raw)
+    ctx = await validate_target(raw)
     if ctx.is_ip:
         raise InvalidTargetError(f"Expected a domain, got IP address: {ctx.host}")
     return ctx
 
 
-def validate_ip(raw: str) -> ScanContext:
+async def validate_ip(raw: str) -> ScanContext:
     """Validate that target is an IP address (not a domain). Returns ScanContext."""
-    ctx = validate_target(raw)
+    ctx = await validate_target(raw)
     if not ctx.is_ip:
         raise InvalidTargetError(f"Expected an IP address, got domain: {ctx.host}")
     return ctx

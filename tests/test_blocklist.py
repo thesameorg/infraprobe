@@ -50,20 +50,20 @@ class TestParseTarget:
 
 
 class TestValidateTarget:
-    def test_public_domain(self):
-        ctx = validate_target("example.com")
+    async def test_public_domain(self):
+        ctx = await validate_target("example.com")
         assert str(ctx) == "example.com"
         assert ctx.is_ip is False
         assert len(ctx.resolved_ips) > 0
 
-    def test_public_ip(self):
-        ctx = validate_target("93.184.216.34")
+    async def test_public_ip(self):
+        ctx = await validate_target("93.184.216.34")
         assert str(ctx) == "93.184.216.34"
         assert ctx.is_ip is True
         assert ctx.resolved_ips == ("93.184.216.34",)
 
-    def test_domain_with_port(self):
-        ctx = validate_target("example.com:443")
+    async def test_domain_with_port(self):
+        ctx = await validate_target("example.com:443")
         assert str(ctx) == "example.com:443"
         assert ctx.port == 443
 
@@ -83,9 +83,9 @@ class TestValidateTarget:
         ],
         ids=lambda ip: ip.replace(".", "_"),
     )
-    def test_blocks_ipv4_private(self, ip: str):
+    async def test_blocks_ipv4_private(self, ip: str):
         with pytest.raises(BlockedTargetError):
-            validate_target(ip)
+            await validate_target(ip)
 
     @pytest.mark.parametrize(
         "ip",
@@ -97,32 +97,32 @@ class TestValidateTarget:
         ],
         ids=["loopback", "v4_mapped", "unique_local", "link_local"],
     )
-    def test_blocks_ipv6_private(self, ip: str):
+    async def test_blocks_ipv6_private(self, ip: str):
         with pytest.raises(BlockedTargetError):
-            validate_target(ip)
+            await validate_target(ip)
 
-    def test_invalid_domain(self):
+    async def test_invalid_domain(self):
         with pytest.raises(InvalidTargetError):
-            validate_target("this-domain-definitely-does-not-exist-xyz123.com")
+            await validate_target("this-domain-definitely-does-not-exist-xyz123.com")
 
 
 class TestValidateDomain:
-    def test_accepts_domain(self):
-        ctx = validate_domain("example.com")
+    async def test_accepts_domain(self):
+        ctx = await validate_domain("example.com")
         assert ctx.is_ip is False
         assert ctx.host == "example.com"
 
-    def test_rejects_ip(self):
+    async def test_rejects_ip(self):
         with pytest.raises(InvalidTargetError, match="Expected a domain"):
-            validate_domain("93.184.216.34")
+            await validate_domain("93.184.216.34")
 
 
 class TestValidateIp:
-    def test_accepts_ip(self):
-        ctx = validate_ip("93.184.216.34")
+    async def test_accepts_ip(self):
+        ctx = await validate_ip("93.184.216.34")
         assert ctx.is_ip is True
         assert ctx.host == "93.184.216.34"
 
-    def test_rejects_domain(self):
+    async def test_rejects_domain(self):
         with pytest.raises(InvalidTargetError, match="Expected an IP"):
-            validate_ip("example.com")
+            await validate_ip("example.com")

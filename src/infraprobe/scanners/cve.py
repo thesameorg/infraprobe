@@ -172,7 +172,7 @@ async def scan(target: str, timeout: float = 30.0, auth=None) -> CheckResult:
 
         # Re-validate and use pre-resolved IP for nmap to prevent DNS rebinding
         try:
-            ctx = validate_target(target)
+            ctx = await validate_target(target)
             nmap_host = ctx.resolved_ips[0] if ctx.resolved_ips else host
         except (BlockedTargetError, InvalidTargetError) as exc:
             return CheckResult(check=CheckType.CVE, error=f"Target validation failed: {exc}")

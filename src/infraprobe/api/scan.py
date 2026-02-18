@@ -272,7 +272,7 @@ async def _run_scan_with_validator(
     auth: AuthConfig | None = None,
 ) -> ScanResponse:
     """Shared orchestration: validate targets, run checks in parallel."""
-    contexts = [validate_target(raw) for raw in targets]
+    contexts = await asyncio.gather(*[validate_target(raw) for raw in targets])
     check_names = [str(c) for c in checks]
     logger.info(
         "scan started: %d target(s) × %d checks [%s]",
@@ -381,9 +381,9 @@ async def scan(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
     if _shutting_down:
         return JSONResponse(status_code=503, content={"error": "shutting_down", "detail": "Server is shutting down"})
 
-    # Validate targets eagerly so 400/422 errors are returned synchronously
+    # Validate targets eagerly so 400/422 errors are returned before job creation
     for raw in request.targets:
-        validate_target(raw)
+        await validate_target(raw)
 
     # Resolve checks (auto-detect if None)
     resolved_checks = _resolve_checks(request.targets, request.checks)
@@ -394,7 +394,7 @@ async def scan(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
     webhook_secret = request.webhook_secret
     if webhook_url:
         try:
-            _validate_webhook_url(webhook_url)
+            await _validate_webhook_url(webhook_url)
         except BlockedTargetError as exc:
             raise InvalidTargetError(str(exc)) from exc
         except ValueError as exc:
@@ -450,7 +450,7 @@ async def _run_single_check(
     auth: AuthConfig | None = None,
 ) -> TargetResult:
     """Run a single check against a target (inline)."""
-    ctx = validate_target(target)
+    ctx = await validate_target(target)
     timeout = settings.deep_scanner_timeout if check_type in _DEEP_CHECKS else settings.scanner_timeout
     logger.info(
         "check request: %s on %s (timeout=%.1fs, ips=%s)",
@@ -516,7 +516,7 @@ def _make_slow_check_handler(ct: CheckType):
             )
 
         # Validate target eagerly
-        validate_target(request.target)
+        await validate_target(request.target)
 
         # Reject DNS-only checks on IP targets
         if ct in DNS_ONLY_CHECKS and parse_target(request.target).is_ip:

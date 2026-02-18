@@ -15,7 +15,7 @@ from infraprobe.models import Job
 logger = logging.getLogger("infraprobe.webhook")
 
 
-def _validate_webhook_url(url: str) -> str:
+async def _validate_webhook_url(url: str) -> str:
     """Validate webhook URL scheme and hostname against SSRF blocklist."""
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -33,9 +33,10 @@ def _validate_webhook_url(url: str) -> str:
     except ValueError:
         pass
 
-    # Hostname is a domain — resolve and check all IPs
+    # Hostname is a domain — resolve and check all IPs (non-blocking)
+    loop = asyncio.get_running_loop()
     try:
-        addrinfos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        addrinfos = await loop.getaddrinfo(hostname, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
         raise ValueError(f"Cannot resolve webhook hostname {hostname}: {exc}") from exc
 

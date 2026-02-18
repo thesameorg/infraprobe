@@ -128,6 +128,15 @@ class ScanRequest(BaseModel):
     auth: AuthConfig | None = Field(default=None, exclude=True)
 
 
+_SCORE_PENALTY: dict[str, int] = {
+    Severity.CRITICAL: 20,
+    Severity.HIGH: 10,
+    Severity.MEDIUM: 4,
+    Severity.LOW: 1,
+    Severity.INFO: 0,
+}
+
+
 class SeveritySummary(BaseModel):
     critical: int = 0
     high: int = 0
@@ -135,12 +144,14 @@ class SeveritySummary(BaseModel):
     low: int = 0
     info: int = 0
     total: int = 0
+    score: int = 100
 
 
 def _compute_summary(findings: list[Finding]) -> SeveritySummary:
     counts: dict[str, int] = {}
     for f in findings:
         counts[f.severity] = counts.get(f.severity, 0) + 1
+    penalty = sum(count * _SCORE_PENALTY.get(sev, 0) for sev, count in counts.items())
     return SeveritySummary(
         critical=counts.get(Severity.CRITICAL, 0),
         high=counts.get(Severity.HIGH, 0),
@@ -148,6 +159,7 @@ def _compute_summary(findings: list[Finding]) -> SeveritySummary:
         low=counts.get(Severity.LOW, 0),
         info=counts.get(Severity.INFO, 0),
         total=len(findings),
+        score=max(0, 100 - penalty),
     )
 
 

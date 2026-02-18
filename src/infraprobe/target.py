@@ -6,6 +6,7 @@ hand-rolling host/port extraction logic.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import socket
 from dataclasses import dataclass
@@ -83,10 +84,11 @@ def parse_target(raw: str) -> Target:
     return Target(host, parsed.port)
 
 
-def build_context(raw: str) -> ScanContext:
+async def build_context(raw: str) -> ScanContext:
     """Parse a target string and resolve IPs, returning a ScanContext.
 
     Does NOT check the blocklist — use ``validate_target`` for that.
+    Uses non-blocking DNS resolution via the event loop.
     """
     from infraprobe.blocklist import InvalidTargetError
 
@@ -95,9 +97,10 @@ def build_context(raw: str) -> ScanContext:
     if target.is_ip:
         return ScanContext(host=target.host, port=target.port, is_ip=True, resolved_ips=(target.host,))
 
-    # Domain — resolve IPs
+    # Domain — resolve IPs (non-blocking)
+    loop = asyncio.get_running_loop()
     try:
-        infos = socket.getaddrinfo(target.host, target.port or 443, proto=socket.IPPROTO_TCP)
+        infos = await loop.getaddrinfo(target.host, target.port or 443, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
         raise InvalidTargetError(f"Cannot resolve {target.host}: {exc}") from exc
 

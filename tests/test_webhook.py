@@ -7,6 +7,10 @@ from fastapi.testclient import TestClient
 from pytest_httpserver import HTTPServer
 
 
+async def _noop_validate_webhook(url: str) -> str:
+    return url
+
+
 def _poll_until_done(client: TestClient, job_id: str, timeout: float = 30) -> dict:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -21,7 +25,7 @@ def _poll_until_done(client: TestClient, job_id: str, timeout: float = 30) -> di
 
 def test_webhook_delivered_on_scan_complete(client: TestClient, httpserver: HTTPServer, monkeypatch):
     # Allow localhost for webhook (normally blocked by SSRF protection)
-    monkeypatch.setattr("infraprobe.api.scan._validate_webhook_url", lambda url: url)
+    monkeypatch.setattr("infraprobe.api.scan._validate_webhook_url", _noop_validate_webhook)
 
     httpserver.expect_request("/webhook", method="POST").respond_with_data("OK", status=200)
     webhook_url = httpserver.url_for("/webhook")
@@ -50,7 +54,7 @@ def test_webhook_delivered_on_scan_complete(client: TestClient, httpserver: HTTP
 
 
 def test_webhook_includes_hmac_signature(client: TestClient, httpserver: HTTPServer, monkeypatch):
-    monkeypatch.setattr("infraprobe.api.scan._validate_webhook_url", lambda url: url)
+    monkeypatch.setattr("infraprobe.api.scan._validate_webhook_url", _noop_validate_webhook)
 
     httpserver.expect_request("/webhook", method="POST").respond_with_data("OK", status=200)
     webhook_url = httpserver.url_for("/webhook")
@@ -92,7 +96,7 @@ def test_webhook_invalid_url_returns_422(client: TestClient):
 
 
 def test_webhook_status_tracked_on_job(client: TestClient, httpserver: HTTPServer, monkeypatch):
-    monkeypatch.setattr("infraprobe.api.scan._validate_webhook_url", lambda url: url)
+    monkeypatch.setattr("infraprobe.api.scan._validate_webhook_url", _noop_validate_webhook)
 
     httpserver.expect_request("/webhook", method="POST").respond_with_data("OK", status=200)
     webhook_url = httpserver.url_for("/webhook")
@@ -128,7 +132,7 @@ def test_no_webhook_when_url_not_provided(client: TestClient):
 
 
 def test_webhook_secret_not_in_job_response(client: TestClient, httpserver: HTTPServer, monkeypatch):
-    monkeypatch.setattr("infraprobe.api.scan._validate_webhook_url", lambda url: url)
+    monkeypatch.setattr("infraprobe.api.scan._validate_webhook_url", _noop_validate_webhook)
 
     httpserver.expect_request("/webhook", method="POST").respond_with_data("OK", status=200)
     webhook_url = httpserver.url_for("/webhook")
