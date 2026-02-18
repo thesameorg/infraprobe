@@ -12,7 +12,7 @@ InfraProbe is an HTTP API that runs security checks against infrastructure targe
 - **`POST /v1/check/{type}`** — single check per endpoint (e.g. `/v1/check/headers`, `/v1/check/ssl_deep`). Fast checks return 200 inline; slow checks (ports, ports_deep, cve) return 202 with a job ID.
 - **`GET /v1/scan/{job_id}`** — poll for job status and results. Supports `?format=` and `?fail_on=` query parameters on completed jobs.
 
-Background jobs use an in-memory `JobStore` (swappable to Firestore). No unversioned routes — all access goes through `/v1`.
+Background jobs use a `JobStore` — `MemoryJobStore` for development, `FirestoreJobStore` for production (survives Cloud Run scale-to-zero). Backend selected via `INFRAPROBE_JOB_STORE_BACKEND`. No unversioned routes — all access goes through `/v1`.
 
 ```
 Client
@@ -58,9 +58,20 @@ src/infraprobe/
 ├── models.py           # Pydantic models + enums (Severity, CheckType, ErrorResponse)
 ├── metrics.py          # Prometheus metrics (request count/duration, scanner duration, active scans)
 ├── blocklist.py        # SSRF protection: block private/reserved IPs (urllib.parse-based)
+├── target.py           # parse_target(), build_context() — URL/host/IPv6 normalization + DNS resolution
 ├── http.py             # Shared HTTP client (scanner_client, fetch_with_fallback)
+├── webhook.py          # Webhook delivery (HMAC-SHA256 signed, retry with backoff)
+├── logging.py          # Structured JSON logging configuration
 ├── api/
 │   └── scan.py         # POST /v1/scan + /v1/check/{type} + GET /v1/scan/{job_id}, orchestrator, scanner registry
+├── formatters/
+│   ├── sarif.py        # SARIF 2.1.0 output formatter
+│   └── csv.py          # CSV output formatter
+├── storage/
+│   ├── __init__.py     # create_job_store() factory
+│   ├── base.py         # JobStore protocol (abstract interface)
+│   ├── memory.py       # MemoryJobStore (default, in-process)
+│   └── firestore.py    # FirestoreJobStore (persistent, for Cloud Run)
 └── scanners/
     ├── headers_drheader.py  # HTTP security headers check (drheaderplus)
     ├── ssl.py          # SSL/TLS certificate and cipher check
@@ -159,6 +170,9 @@ SSRF protection layer. Called before any scanner runs.
 | `job_cleanup_interval` | `300` | `INFRAPROBE_JOB_CLEANUP_INTERVAL` | `gt=0` |
 | `webhook_timeout` | `5.0` | `INFRAPROBE_WEBHOOK_TIMEOUT` | `gt=0` |
 | `webhook_max_retries` | `3` | `INFRAPROBE_WEBHOOK_MAX_RETRIES` | `ge=0` |
+| `job_store_backend` | `"memory"` | `INFRAPROBE_JOB_STORE_BACKEND` | `memory` or `firestore` |
+| `firestore_project` | `None` | `INFRAPROBE_FIRESTORE_PROJECT` | — |
+| `firestore_database` | `None` | `INFRAPROBE_FIRESTORE_DATABASE` | — |
 
 ---
 
@@ -276,16 +290,16 @@ Only input validation fails the entire request. Scanner failures are isolated �
 ```
 Push to main
   └─ CI (GitHub Actions)
-       ├── ruff check + ruff format --check
-       ├── ty check
+       ├── uv sync --extra firestore
        ├── pip-audit (dependency vulnerability scanning)
-       └── pytest
+       ├── Start Firestore emulator (gcloud)
+       └── pytest (with FIRESTORE_EMULATOR_HOST)
             └─ on success ─→ Deploy
-                              ├── docker build + push to Artifact Registry
-                              └── gcloud run deploy (SHA-tagged image)
+                              ├── docker build + push to Artifact Registry (with --extra firestore)
+                              └── gcloud run deploy (SHA-tagged image, JOB_STORE_BACKEND=firestore)
 ```
 
-Deploy workflow triggers on CI success (not in parallel). Uses immutable SHA-tagged images for Cloud Run deployments. Artifact Registry in the same GCP region as Cloud Run.
+Deploy workflow triggers on CI success (not in parallel). Uses immutable SHA-tagged images for Cloud Run deployments. Artifact Registry in the same GCP region as Cloud Run. Production uses real Firestore (Native mode) via Application Default Credentials on the Cloud Run service account.
 
 ### Docker
 
@@ -297,15 +311,15 @@ FROM ghcr.io/astral-sh/uv:0.6-python3.12-bookworm-slim
 CMD ["uv", "run", "uvicorn", "infraprobe.app:app", "--host", "0.0.0.0", "--port", "8080"]
 ```
 
-Production: no `--reload`, no dev dependencies (`--no-dev`), frozen lockfile (`--frozen`).
+Production: no `--reload`, no dev dependencies (`--no-dev`), frozen lockfile (`--frozen`), Firestore extra installed (`--extra firestore`).
 
-Local dev: `docker-compose.yaml` mounts source as volume, enables `--reload`, maps host port 8000 to container port 8080.
+Local dev: `docker-compose.yaml` maps host port 8000 to container port 8080. Optional `firestore` profile starts a Firestore emulator sidecar for local testing (`docker compose --profile firestore up`).
 
 ---
 
 ## Current State
 
-**Deployed:** Live on Google Cloud Run. URL stored in `.envs/deployed.url`, RapidAPI proxy secret in `.envs/rapidapi_proxy_secret.txt`. CI/CD pipeline pushes on every `main` merge.
+**Deployed:** Live on Google Cloud Run with Firestore job storage. URL stored in `.envs/deployed.url`, RapidAPI proxy secret in `.envs/rapidapi_proxy_secret.txt`. CI/CD pipeline pushes on every `main` merge. Cloud Run service account has `roles/datastore.user` for Firestore access; Firestore TTL policy on `expire_at` auto-deletes expired jobs.
 
 **Deployment verification:** `scripts/verify_deploy.py` tests all endpoints against a live instance — health, every scanner (fast inline + slow async), bundle scan (submit → poll), target auto-detection, output formats (JSON, SARIF, CSV), error handling (SSRF block, validation), and auth enforcement. Reads URL and secret from `.envs/` by default; also supports `uv run python scripts/verify_deploy.py http://localhost:8080` for local dev.
 
@@ -324,7 +338,7 @@ Production robustness measures implemented:
 - **Config validation:** All numeric settings have Pydantic `Field` constraints; invalid values (e.g. `scanner_timeout=0`) are rejected at startup. `log_level` validated against Python's logging levels.
 - **Input limits:** `TargetStr` type enforces `max_length=2048` on all target strings and webhook URLs to prevent DoS via oversized payloads.
 - **Consistent error shapes:** All error responses use `{"error": "<code>", "detail": "<message>"}`. Catch-all `Exception` handler returns 500 `internal_error`.
-- **Job store hardening:** `asyncio.Lock` protects all `_jobs` dict access. Cleanup loop wrapped in `try/except` with `logger.exception()`. TTL expiration based on `updated_at` (not `created_at`) so active jobs aren't prematurely evicted.
+- **Job store hardening:** `MemoryJobStore` uses `asyncio.Lock` to protect all `_jobs` dict access. Cleanup loop wrapped in `try/except` with `logger.exception()`. TTL expiration based on `updated_at` (not `created_at`) so active jobs aren't prematurely evicted. `FirestoreJobStore` available for persistent storage (uses Firestore TTL policy on `expire_at` field — no cleanup loop needed). Backend selected via `INFRAPROBE_JOB_STORE_BACKEND` (`memory`|`firestore`).
 - **Scan concurrency:** `asyncio.Semaphore` (configurable, default 5) limits concurrent `_scan_target()` calls to prevent event loop starvation under load.
 - **Nmap concurrency:** `asyncio.Semaphore` (configurable, default 6) limits concurrent nmap processes in port and CVE scanners to prevent OOM. All nmap checks are async, so they queue and wait for slots.
 - **Readiness probe:** `GET /health/ready` checks cleanup task is alive, returns 503 if not. Separate from liveness (`GET /health`).

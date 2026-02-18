@@ -73,6 +73,21 @@ Deep scans use more thorough tools and have a 30-second timeout (vs 10 seconds f
 
 Checks that produce no findings and no errors are omitted from CSV output. SARIF output includes all rules but may have zero results if no issues were found.
 
+### Firestore "Permission Denied" errors
+
+The service account used to connect to Firestore needs the `Cloud Datastore User` role (`roles/datastore.user`). For local development, set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file. In production (Cloud Run), the compute service account gets this role.
+
+```bash
+# Grant Firestore access to a service account
+gcloud projects add-iam-policy-binding PROJECT_ID \
+  --member="serviceAccount:SA_EMAIL" \
+  --role="roles/datastore.user"
+```
+
+### Jobs disappear after restart (memory backend)
+
+The default `memory` job store loses all jobs when the server restarts. Set `INFRAPROBE_JOB_STORE_BACKEND=firestore` for persistent storage that survives restarts and Cloud Run scale-to-zero.
+
 ## Performance Tips
 
 - **Use specific checks** instead of running all defaults when you only need certain data

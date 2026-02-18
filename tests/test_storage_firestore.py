@@ -1,11 +1,16 @@
-"""Tests for FirestoreJobStore against the Firestore emulator.
+"""Tests for FirestoreJobStore against the Firestore emulator or real Firestore.
 
-Requires:
+Option A — Emulator (CI):
   1. google-cloud-firestore installed: uv sync --extra firestore
   2. Firestore emulator running: gcloud emulators firestore start --host-port=localhost:8686
   3. Env var: FIRESTORE_EMULATOR_HOST=localhost:8686
 
-Tests skip automatically if either requirement is missing.
+Option B — Real Firestore (local verification):
+  1. google-cloud-firestore installed: uv sync --extra firestore
+  2. Env var: GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+  3. Env var: INFRAPROBE_FIRESTORE_PROJECT=<project-id>
+
+Tests skip automatically if neither option is configured.
 """
 
 from __future__ import annotations
@@ -34,21 +39,34 @@ try:
 except ImportError:
     HAS_FIRESTORE = False
 
+_HAS_EMULATOR = bool(os.environ.get("FIRESTORE_EMULATOR_HOST"))
+_HAS_REAL_CREDS = bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")) and bool(
+    os.environ.get("INFRAPROBE_FIRESTORE_PROJECT")
+)
+
 pytestmark = [
     pytest.mark.skipif(not HAS_FIRESTORE, reason="google-cloud-firestore not installed (uv sync --extra firestore)"),
     pytest.mark.skipif(
-        not os.environ.get("FIRESTORE_EMULATOR_HOST"),
-        reason="FIRESTORE_EMULATOR_HOST not set (start emulator: gcloud emulators firestore start)",
+        not _HAS_EMULATOR and not _HAS_REAL_CREDS,
+        reason=(
+            "Set FIRESTORE_EMULATOR_HOST for emulator, or "
+            "GOOGLE_APPLICATION_CREDENTIALS + INFRAPROBE_FIRESTORE_PROJECT for real Firestore"
+        ),
     ),
 ]
 
 
 @pytest.fixture
 async def store():
-    """Create a FirestoreJobStore connected to the emulator, clean up after."""
+    """Create a FirestoreJobStore connected to emulator or real Firestore, clean up after."""
     from infraprobe.storage.firestore import FirestoreJobStore
 
-    s = FirestoreJobStore(project="test-project", database="(default)", ttl_seconds=3600)
+    if _HAS_EMULATOR:
+        project = "test-project"
+    else:
+        project = os.environ["INFRAPROBE_FIRESTORE_PROJECT"]
+
+    s = FirestoreJobStore(project=project, database="(default)", ttl_seconds=3600)
     yield s
     # Clean up all documents in the collection
     async for doc in s._collection.stream():

@@ -14,14 +14,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
+
       - name: Install nmap
         run: sudo apt-get update && sudo apt-get install -y nmap
-      - run: uv sync --frozen
+
+      - name: Set up gcloud + Firestore emulator
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: 'cloud-firestore-emulator'
+
+      - run: uv sync --frozen --extra firestore
       - run: uv run pip-audit
+
+      - name: Start Firestore emulator
+        run: |
+          gcloud emulators firestore start --host-port=localhost:8686 --quiet &
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8686/ > /dev/null 2>&1; then
+              echo "Firestore emulator ready"
+              break
+            fi
+            sleep 1
+          done
+
       - run: uv run pytest
         env:
           INFRAPROBE_RAPIDAPI_PROXY_SECRET: test
           INFRAPROBE_NVD_API_KEY: test
+          FIRESTORE_EMULATOR_HOST: localhost:8686
 
   deploy:
     needs: test
@@ -64,3 +84,5 @@ jobs:
             INFRAPROBE_NVD_API_KEY=${{ secrets.INFRAPROBE_NVD_API_KEY }}
             INFRAPROBE_ENV=production
             INFRAPROBE_LOG_LEVEL=info
+            INFRAPROBE_JOB_STORE_BACKEND=firestore
+            INFRAPROBE_FIRESTORE_PROJECT=${{ vars.GCP_PROJECT_ID }}

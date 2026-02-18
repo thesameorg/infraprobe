@@ -4,10 +4,10 @@ FROM ghcr.io/astral-sh/uv:0.6-python3.12-bookworm-slim AS builder
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --extra firestore
 
 COPY . .
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev --extra firestore
 
 # Strip build artifacts: __pycache__, .pyc, test suites, selenium (unused wappalyzer.browser dep)
 # WARNING: stripping wappalyzer/browser requires a sys.modules stub in scanners/deep/tech.py

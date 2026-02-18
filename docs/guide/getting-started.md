@@ -224,6 +224,20 @@ Requests without a valid secret receive `403 Forbidden`.
 
 To disable authentication for local development, set `INFRAPROBE_DEV_BYPASS_AUTH=true` in your `.env` file. When enabled, the RapidAPI proxy-secret middleware is skipped entirely and no auth header is required. Defaults to `false`.
 
+### Job Storage
+
+By default, InfraProbe uses in-memory job storage (jobs lost on restart). For persistent storage matching the production setup, use Firestore:
+
+```bash
+INFRAPROBE_JOB_STORE_BACKEND=firestore \
+INFRAPROBE_FIRESTORE_PROJECT=your-gcp-project \
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json \
+INFRAPROBE_DEV_BYPASS_AUTH=true \
+uv run python main.py
+```
+
+The service account needs the `Cloud Datastore User` role (`roles/datastore.user`). In production (Cloud Run), authentication is handled via Application Default Credentials automatically.
+
 ---
 
 [Back to overview](README.md) | [Troubleshooting](troubleshooting.md)
