@@ -1,0 +1,71 @@
+{
+  "_description": "Curated scan targets for benchmarks, integration tests, and validation. Each target has a rationale.",
+  "_updated": "2026-02-26",
+
+  "scan_me": {
+    "_description": "Explicitly permit scanning — designed for security tool testing",
+    "targets": [
+      {"target": "scanme.nmap.org", "note": "Nmap official scan-me, SSH/HTTP open"},
+      {"target": "testphp.vulnweb.com", "note": "Acunetix vuln test app (PHP, no HTTPS)"},
+      {"target": "testhtml5.vulnweb.com", "note": "Acunetix vuln test app (HTML5)"},
+      {"target": "testasp.vulnweb.com", "note": "Acunetix vuln test app (ASP.NET)"},
+      {"target": "testaspnet.vulnweb.com", "note": "Acunetix vuln test app (ASP.NET variant)"},
+      {"target": "demo.testfire.net", "note": "IBM/HCL AppScan demo (vulnerable banking app)"},
+      {"target": "zero.webappsecurity.com", "note": "OpenText vuln test site"}
+    ]
+  },
+
+  "hardened": {
+    "_description": "Well-configured production sites — expect good security posture",
+    "targets": [
+      {"target": "cloudflare.com", "note": "CDN provider, excellent headers/TLS"},
+      {"target": "github.com", "note": "DevOps platform, strong HSTS/CSP"},
+      {"target": "mozilla.org", "note": "Security-conscious org"},
+      {"target": "stripe.com", "note": "Payment processor, PCI-compliant"}
+    ]
+  },
+
+  "interesting": {
+    "_description": "Various security postures — missing headers, legacy TLS, CDN-fronted",
+    "targets": [
+      {"target": "example.com", "note": "IANA reserved, minimal headers, basic TLS"},
+      {"target": "neverssl.com", "note": "Intentionally no HTTPS (captive portal helper)"},
+      {"target": "httpbin.org", "note": "HTTP testing service, sometimes slow/flaky"},
+      {"target": "wordpress.com", "note": "CMS, lots of tech to detect"},
+      {"target": "nginx.org", "note": "Nginx homepage, minimal config"}
+    ]
+  },
+
+  "badssl": {
+    "_description": "badssl.com subdomains with intentional SSL misconfigurations",
+    "targets": [
+      {"target": "expired.badssl.com", "note": "Expired certificate"},
+      {"target": "self-signed.badssl.com", "note": "Self-signed certificate"},
+      {"target": "wrong.host.badssl.com", "note": "Wrong hostname in cert"},
+      {"target": "rc4.badssl.com", "note": "RC4 cipher only"},
+      {"target": "null.badssl.com", "note": "Null cipher"},
+      {"target": "tls-v1-0.badssl.com:1010", "note": "TLS 1.0 only, non-standard port"},
+      {"target": "tls-v1-1.badssl.com:1011", "note": "TLS 1.1 only, non-standard port"}
+    ]
+  },
+
+  "ips": {
+    "_description": "Public infrastructure IPs with known open ports",
+    "targets": [
+      {"target": "1.1.1.1", "note": "Cloudflare DNS — open 53/80/443"},
+      {"target": "8.8.8.8", "note": "Google DNS — open 53/443"},
+      {"target": "208.67.222.222", "note": "OpenDNS — open 53/80/443"},
+      {"target": "9.9.9.9", "note": "Quad9 DNS — open 53/443"},
+      {"target": "45.33.32.156", "note": "scanme.nmap.org resolved IP — SSH/HTTP open"}
+    ]
+  },
+
+  "nmap_subset": {
+    "_description": "Small set for slow nmap-based checks (ports, ports_deep, cve)",
+    "targets": [
+      {"target": "scanme.nmap.org", "note": "Nmap official scan-me"},
+      {"target": "testphp.vulnweb.com", "note": "Acunetix vuln test app"},
+      {"target": "demo.testfire.net", "note": "IBM/HCL vuln app"}
+    ]
+  }
+}
