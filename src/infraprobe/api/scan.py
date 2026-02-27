@@ -3,9 +3,7 @@ import json
 import logging
 import time
 from collections.abc import Callable, Coroutine
-from typing import Annotated
-
-from fastapi import APIRouter, Query
+from fastapi import APIRouter
 from fastapi.responses import Response
 
 from infraprobe.blocklist import validate_target
@@ -28,8 +26,6 @@ from infraprobe.target import ScanContext, parse_target
 
 router = APIRouter()
 logger = logging.getLogger("infraprobe.scanner")
-
-FormatParam = Annotated[OutputFormat, Query(alias="format")]
 
 
 # ---------------------------------------------------------------------------
@@ -225,10 +221,10 @@ async def _run_scan_with_contexts(
         "Run a security scan against a single target. "
         "Returns **200** with inline results. "
         "Domains get headers/ssl/dns/web/whois; IPs get headers/ssl/web. "
-        "Use `?format=sarif|csv` for alternative output formats."
+        "Set `format` in the request body to `sarif` or `csv` for alternative output formats."
     ),
 )
-async def scan(request: SingleCheckRequest, fmt: FormatParam = OutputFormat.JSON) -> ScanResponse | Response:
+async def scan(request: SingleCheckRequest) -> ScanResponse | Response:
     # Resolve fixed checks based on target type
     is_ip = parse_target(request.target).is_ip
     checks = list(IP_CHECKS) if is_ip else list(DOMAIN_CHECKS)
@@ -237,4 +233,4 @@ async def scan(request: SingleCheckRequest, fmt: FormatParam = OutputFormat.JSON
     ctx = await validate_target(request.target)
     result = await _run_scan_with_contexts([ctx], checks, request.auth)
 
-    return _format_scan_response(result, fmt)
+    return _format_scan_response(result, request.format)

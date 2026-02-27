@@ -40,18 +40,20 @@ curl -X POST localhost:8080/v1/scan \
   -d '{"target": "example.com"}'
 
 # SARIF output
-curl -X POST "localhost:8080/v1/scan?format=sarif" \
+curl -X POST localhost:8080/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"target": "example.com"}'
+  -d '{"target": "example.com", "format": "sarif"}'
 ```
 
 ## Output formats
 
-| Format | Query param | Content-Type |
+Set `"format"` in the request body:
+
+| Format | Body field | Content-Type |
 |--------|------------|-------------|
-| JSON (default) | `?format=json` | `application/json` |
-| SARIF 2.1.0 | `?format=sarif` | `application/sarif+json` |
-| CSV | `?format=csv` | `text/csv` |
+| JSON (default) | `"format": "json"` | `application/json` |
+| SARIF 2.1.0 | `"format": "sarif"` | `application/sarif+json` |
+| CSV | `"format": "csv"` | `text/csv` |
 
 ## Local development
 

@@ -8,7 +8,7 @@ Technical architecture for InfraProbe. Covers system design, component structure
 
 InfraProbe is an HTTP API that runs security checks against infrastructure targets. Single endpoint under `/v1`:
 
-- **`POST /v1/scan`** — bundle endpoint. Accepts a single `target`, runs a fixed set of checks based on target type (domains: headers/ssl/dns/web/whois; IPs: headers/ssl/web). Always returns **200** with inline results. Supports `?format=json|sarif|csv`.
+- **`POST /v1/scan`** — bundle endpoint. Accepts a single `target`, runs a fixed set of checks based on target type (domains: headers/ssl/dns/web/whois; IPs: headers/ssl/web). Always returns **200** with inline results. Supports `format` field in request body: `json` (default), `sarif`, `csv`.
 
 No unversioned routes — all access goes through `/v1`.
 

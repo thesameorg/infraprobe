@@ -168,8 +168,8 @@ def probe_output_formats(client: httpx.Client, stats: Stats) -> None:
     print(section("Output formats"))
 
     # SARIF
-    resp = client.post("/v1/scan?format=sarif", json={"target": TEST_DOMAIN})
-    body = check_response(stats, "POST /v1/scan?format=sarif", resp)
+    resp = client.post("/v1/scan", json={"target": TEST_DOMAIN, "format": "sarif"})
+    body = check_response(stats, "POST /v1/scan format=sarif", resp)
     if body and isinstance(body, dict):
         if body.get("$schema") or body.get("runs"):
             print(f"       {DIM}valid SARIF structure{RESET}")
@@ -177,13 +177,13 @@ def probe_output_formats(client: httpx.Client, stats: Stats) -> None:
             stats.record_warn("  SARIF response missing expected keys ($schema, runs)")
 
     # CSV
-    resp = client.post("/v1/scan?format=csv", json={"target": TEST_DOMAIN})
+    resp = client.post("/v1/scan", json={"target": TEST_DOMAIN, "format": "csv"})
     if resp.status_code == 200 and ("target" in resp.text or "severity" in resp.text):
-        stats.record_pass(f"POST /v1/scan?format=csv [{resp.status_code}] ({resp.elapsed.total_seconds():.1f}s)")
+        stats.record_pass(f"POST /v1/scan format=csv [{resp.status_code}] ({resp.elapsed.total_seconds():.1f}s)")
     elif resp.status_code == 200:
-        stats.record_warn(f"POST /v1/scan?format=csv [{resp.status_code}] — unexpected body")
+        stats.record_warn(f"POST /v1/scan format=csv [{resp.status_code}] — unexpected body")
     else:
-        stats.record_fail(f"POST /v1/scan?format=csv [{resp.status_code}]")
+        stats.record_fail(f"POST /v1/scan format=csv [{resp.status_code}]")
 
 
 def probe_error_handling(client: httpx.Client, stats: Stats) -> None:

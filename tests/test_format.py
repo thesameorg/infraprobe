@@ -166,12 +166,12 @@ class TestRuleIdFormat:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests — format query parameter on real endpoints
+# Integration tests — format in request body on real endpoints
 # ---------------------------------------------------------------------------
 
 
-class TestFormatQueryParam:
-    """Test ?format= query parameter on live endpoints."""
+class TestFormatBody:
+    """Test format field in request body on live endpoints."""
 
     def test_default_format_is_json(self, client):
         """POST /v1/scan returns 200; result is JSON by default."""
@@ -179,8 +179,8 @@ class TestFormatQueryParam:
         assert "results" in result
 
     def test_sarif_format_on_scan(self, client):
-        """POST /v1/scan?format=sarif returns SARIF directly."""
-        resp = client.post("/v1/scan?format=sarif", json={"target": "example.com"})
+        """POST /v1/scan with format=sarif returns SARIF directly."""
+        resp = client.post("/v1/scan", json={"target": "example.com", "format": "sarif"})
         assert resp.status_code == 200
         assert "sarif" in resp.headers["content-type"]
 
@@ -193,12 +193,12 @@ class TestFormatQueryParam:
 
     def test_invalid_format_returns_422(self, client):
         """Invalid format returns 422."""
-        resp = client.post("/v1/scan?format=xml", json={"target": "example.com"})
+        resp = client.post("/v1/scan", json={"target": "example.com", "format": "xml"})
         assert resp.status_code == 422
 
     def test_sarif_is_valid_json(self, client):
         """SARIF response should be parseable JSON."""
-        resp = client.post("/v1/scan?format=sarif", json={"target": "example.com"})
+        resp = client.post("/v1/scan", json={"target": "example.com", "format": "sarif"})
         assert resp.status_code == 200
         # Should not raise
         sarif = json.loads(resp.content)
@@ -206,7 +206,7 @@ class TestFormatQueryParam:
 
     def test_error_responses_stay_json(self, client):
         """Error responses (blocked target) should always be JSON, not SARIF."""
-        resp = client.post("/v1/scan?format=sarif", json={"target": "127.0.0.1"})
+        resp = client.post("/v1/scan", json={"target": "127.0.0.1", "format": "sarif"})
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("application/json")
         assert "detail" in resp.json()
@@ -304,16 +304,16 @@ class TestCsvStructure:
 
 
 # ---------------------------------------------------------------------------
-# Integration tests — CSV format query parameter on real endpoints
+# Integration tests — CSV format in request body on real endpoints
 # ---------------------------------------------------------------------------
 
 
-class TestCsvFormatQueryParam:
-    """Test ?format=csv query parameter on live endpoints."""
+class TestCsvFormatBody:
+    """Test format=csv in request body on live endpoints."""
 
     def test_csv_format_on_scan(self, client):
-        """POST /v1/scan?format=csv returns CSV directly."""
-        resp = client.post("/v1/scan?format=csv", json={"target": "example.com"})
+        """POST /v1/scan with format=csv returns CSV directly."""
+        resp = client.post("/v1/scan", json={"target": "example.com", "format": "csv"})
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/csv")
         rows = _parse_csv(resp.text)
@@ -322,7 +322,7 @@ class TestCsvFormatQueryParam:
 
     def test_csv_error_responses_stay_json(self, client):
         """Error responses (blocked target) should always be JSON, not CSV."""
-        resp = client.post("/v1/scan?format=csv", json={"target": "127.0.0.1"})
+        resp = client.post("/v1/scan", json={"target": "127.0.0.1", "format": "csv"})
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("application/json")
         assert "detail" in resp.json()

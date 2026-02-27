@@ -296,8 +296,8 @@ class MixedWorkload(InfraProbeUser):
     @task(5)
     def sarif_output(self):
         self.client.post(
-            "/v1/scan?format=sarif",
-            json={"targets": [random_target()]},
+            "/v1/scan",
+            json={"targets": [random_target()], "format": "sarif"},
             name="/v1/scan [1t sarif]",
         )
 
@@ -540,8 +540,8 @@ class Smoke(InfraProbeUser):
     @task
     def sarif_format(self):
         self.client.post(
-            "/v1/scan?format=sarif",
-            json={"targets": [random_target()]},
+            "/v1/scan",
+            json={"targets": [random_target()], "format": "sarif"},
             name="/v1/scan [smoke-sarif]",
         )
 

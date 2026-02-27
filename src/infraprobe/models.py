@@ -107,10 +107,14 @@ AuthConfig = Annotated[
 
 
 class SingleCheckRequest(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"target": "example.com"}]})
+    model_config = ConfigDict(json_schema_extra={"examples": [{"target": "example.com", "format": "json"}]})
 
     target: TargetStr = Field(
         description="Domain name, IP address, or host:port to scan (e.g. 'example.com', '93.184.216.34')."
+    )
+    format: OutputFormat = Field(
+        default=OutputFormat.JSON,
+        description="Output format: json (default), sarif, or csv.",
     )
     auth: AuthConfig | None = Field(
         default=None,

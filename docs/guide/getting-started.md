@@ -84,14 +84,14 @@ A scan response contains one `TargetResult` per target, with a severity summary:
 
 ## Output Formats
 
-Use the `format` query parameter to change the response format.
+Set `"format"` in the request body to change the response format.
 
 ### JSON (default)
 
 ```bash
-curl -X POST "https://your-instance/v1/scan?format=json" \
+curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"target": "example.com"}'
+  -d '{"target": "example.com", "format": "json"}'
 ```
 
 ### SARIF 2.1.0
@@ -99,9 +99,9 @@ curl -X POST "https://your-instance/v1/scan?format=json" \
 Produces [SARIF](https://docs.oasis-open.org/sarif/sarif/v2.1.0/) output compatible with GitHub Code Scanning, VS Code SARIF Viewer, and other SARIF-consuming tools.
 
 ```bash
-curl -X POST "https://your-instance/v1/scan?format=sarif" \
+curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"target": "example.com"}'
+  -d '{"target": "example.com", "format": "sarif"}'
 ```
 
 Severity mapping in SARIF:
@@ -119,9 +119,9 @@ Severity mapping in SARIF:
 One row per finding. Useful for spreadsheet analysis and reporting.
 
 ```bash
-curl -X POST "https://your-instance/v1/scan?format=csv" \
+curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"target": "example.com"}'
+  -d '{"target": "example.com", "format": "csv"}'
 ```
 
 Columns: `target`, `check`, `severity`, `title`, `description`, `details`
