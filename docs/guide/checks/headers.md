@@ -3,9 +3,8 @@
 Analyzes HTTP security headers using the drHEADer rule engine.
 
 - **Check type:** `headers`
-- **Endpoint:** `POST /v1/check/headers`
-- **Default:** Yes (all targets)
-- **Deep variant:** None
+- **Included in:** `POST /v1/scan`
+- **Targets:** All
 
 ## What Is Checked
 

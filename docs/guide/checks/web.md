@@ -3,9 +3,8 @@
 Checks for CORS misconfigurations, exposed sensitive files, robots.txt leaks, mixed content, and security.txt presence.
 
 - **Check type:** `web`
-- **Endpoint:** `POST /v1/check/web`
-- **Default:** Opt-in (not included in default scans)
-- **Deep variant:** None
+- **Included in:** `POST /v1/scan`
+- **Targets:** All
 
 ## What Is Checked
 

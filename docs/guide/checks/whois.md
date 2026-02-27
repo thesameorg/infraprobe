@@ -3,9 +3,8 @@
 Retrieves domain registration information including registrar, creation date, expiration date, and DNSSEC status.
 
 - **Check type:** `whois`
-- **Endpoint:** `POST /v1/check/whois`
-- **Default:** Yes (domains only)
-- **Deep variant:** None
+- **Included in:** `POST /v1/scan`
+- **Targets:** Domains only
 - **Not available for IP targets**
 
 ## What Is Checked
