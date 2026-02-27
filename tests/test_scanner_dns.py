@@ -1,22 +1,23 @@
-"""Comprehensive integration tests for the DNS scanner via POST /v1/check/dns."""
+"""Comprehensive integration tests for the DNS scanner via POST /v1/scan."""
 
 import pytest
+
+from tests.helpers import submit_scan
 
 pytestmark = pytest.mark.integration
 
 
-def _dns_check(client, target: str) -> dict:
-    """POST /v1/check/dns and return the full response dict.
+def _dns_result(client, target: str) -> dict:
+    """Run a bundle scan and return the DNS check result dict.
 
     Skips the test if the DNS scanner times out (network-dependent).
     """
-    resp = client.post("/v1/check/dns", json={"target": target})
-    assert resp.status_code == 200
-    data = resp.json()
-    dns_result = data["results"]["dns"]
+    data = submit_scan(client, {"target": target})
+    tr = data["results"][0]
+    dns_result = tr["results"]["dns"]
     if dns_result["error"] and "timed out" in dns_result["error"]:
         pytest.skip("DNS scanner timed out (network-dependent)")
-    return data
+    return tr
 
 
 # ---------------------------------------------------------------------------
@@ -26,13 +27,13 @@ def _dns_check(client, target: str) -> dict:
 
 def test_dns_records_present(client):
     """Scan google.com -- should resolve A, NS, and MX records."""
-    data = _dns_check(client, "google.com")
-    assert data["target"] == "google.com"
+    tr = _dns_result(client, "google.com")
+    assert tr["target"] == "google.com"
 
-    dns_result = data["results"]["dns"]
-    assert dns_result["error"] is None
+    dns = tr["results"]["dns"]
+    assert dns["error"] is None
 
-    raw = dns_result["raw"]
+    raw = dns["raw"]
     assert raw["domain"] == "google.com"
     assert len(raw["a"]) > 0, f"google.com should have A records, got: {raw['a']}"
     assert len(raw["ns"]) > 0, f"google.com should have NS records, got: {raw['ns']}"
@@ -46,13 +47,13 @@ def test_dns_records_present(client):
 
 def test_spf_record_detected(client):
     """Scan google.com -- should detect SPF record and produce an SPF-present finding."""
-    data = _dns_check(client, "google.com")
+    tr = _dns_result(client, "google.com")
 
-    dns_result = data["results"]["dns"]
-    assert dns_result["error"] is None
+    dns = tr["results"]["dns"]
+    assert dns["error"] is None
 
     # SPF should appear in raw data
-    raw = dns_result["raw"]
+    raw = dns["raw"]
     assert "spf" in raw, f"google.com should have SPF in raw, keys: {list(raw.keys())}"
     assert "v=spf1" in raw["spf"].lower()
 
@@ -62,7 +63,7 @@ def test_spf_record_detected(client):
     assert len(spf_txts) > 0, f"Expected SPF in TXT records, got: {txt_records}"
 
     # Findings should include an "SPF record present" info finding (not "No SPF record")
-    titles = [f["title"] for f in dns_result["findings"]]
+    titles = [f["title"] for f in dns["findings"]]
     assert "SPF record present" in titles, f"Expected 'SPF record present' finding, got: {titles}"
     assert "No SPF record" not in titles, f"google.com should not flag missing SPF, got: {titles}"
 
@@ -74,12 +75,12 @@ def test_spf_record_detected(client):
 
 def test_dmarc_record_detected(client):
     """Scan google.com -- should detect DMARC record from _dmarc subdomain."""
-    data = _dns_check(client, "google.com")
+    tr = _dns_result(client, "google.com")
 
-    dns_result = data["results"]["dns"]
-    assert dns_result["error"] is None
+    dns = tr["results"]["dns"]
+    assert dns["error"] is None
 
-    raw = dns_result["raw"]
+    raw = dns["raw"]
     assert "dmarc" in raw, f"google.com should have DMARC in raw, keys: {list(raw.keys())}"
     assert "v=dmarc1" in raw["dmarc"].lower()
 
@@ -87,7 +88,7 @@ def test_dmarc_record_detected(client):
     assert len(raw.get("dmarc_txt", [])) > 0, "Expected _dmarc TXT records in raw"
 
     # Findings should confirm DMARC is present
-    titles = [f["title"] for f in dns_result["findings"]]
+    titles = [f["title"] for f in dns["findings"]]
     assert "DMARC record present" in titles, f"Expected 'DMARC record present' finding, got: {titles}"
     assert "No DMARC record" not in titles, f"google.com should not flag missing DMARC, got: {titles}"
 
@@ -99,16 +100,16 @@ def test_dmarc_record_detected(client):
 
 def test_caa_records(client):
     """Scan google.com -- should have CAA records restricting certificate issuance."""
-    data = _dns_check(client, "google.com")
+    tr = _dns_result(client, "google.com")
 
-    dns_result = data["results"]["dns"]
-    assert dns_result["error"] is None
+    dns = tr["results"]["dns"]
+    assert dns["error"] is None
 
-    raw = dns_result["raw"]
+    raw = dns["raw"]
     assert len(raw.get("caa", [])) > 0, f"google.com should have CAA records, got: {raw.get('caa')}"
 
     # Findings should confirm CAA is present (not "No CAA records")
-    titles = [f["title"] for f in dns_result["findings"]]
+    titles = [f["title"] for f in dns["findings"]]
     assert "CAA records present" in titles, f"Expected 'CAA records present' finding, got: {titles}"
     assert "No CAA records" not in titles, f"google.com should not flag missing CAA, got: {titles}"
 
@@ -120,13 +121,13 @@ def test_caa_records(client):
 
 def test_missing_security_records(client):
     """Scan example.com -- likely missing DMARC and/or SPF, should flag them."""
-    data = _dns_check(client, "example.com")
+    tr = _dns_result(client, "example.com")
 
-    dns_result = data["results"]["dns"]
-    assert dns_result["error"] is None
+    dns = tr["results"]["dns"]
+    assert dns["error"] is None
 
-    titles = [f["title"] for f in dns_result["findings"]]
-    severities = {f["title"]: f["severity"] for f in dns_result["findings"]}
+    titles = [f["title"] for f in dns["findings"]]
+    severities = {f["title"]: f["severity"] for f in dns["findings"]}
 
     # example.com typically lacks SPF and/or DMARC and/or CAA.
     # At least one "missing" finding should be present.
@@ -149,12 +150,12 @@ def test_missing_security_records(client):
 
 def test_raw_data_structure(client):
     """Verify the raw dict contains all expected DNS record type keys."""
-    data = _dns_check(client, "google.com")
+    tr = _dns_result(client, "google.com")
 
-    dns_result = data["results"]["dns"]
-    assert dns_result["error"] is None
+    dns = tr["results"]["dns"]
+    assert dns["error"] is None
 
-    raw = dns_result["raw"]
+    raw = dns["raw"]
 
     # Must have the domain field
     assert "domain" in raw
@@ -177,12 +178,12 @@ def test_raw_data_structure(client):
 
 
 def test_summary_field(client):
-    """Verify summary has correct severity counts matching the findings."""
-    data = _dns_check(client, "google.com")
+    """Verify summary has correct structure and non-negative counts."""
+    tr = _dns_result(client, "google.com")
 
-    assert "summary" in data, f"Response should have summary field, got keys: {list(data.keys())}"
+    assert "summary" in tr, f"TargetResult should have summary field, got keys: {list(tr.keys())}"
+    summary = tr["summary"]
 
-    summary = data["summary"]
     # Summary should have all severity count fields
     for level in ("critical", "high", "medium", "low", "info", "total"):
         assert level in summary, f"Summary missing '{level}' field"
@@ -194,19 +195,7 @@ def test_summary_field(client):
         summary["critical"] + summary["high"] + summary["medium"] + summary["low"] + summary["info"]
     ), f"Total mismatch: {summary}"
 
-    # Cross-check against actual findings
-    dns_result = data["results"]["dns"]
-    findings = dns_result["findings"]
-    assert summary["total"] == len(findings), (
-        f"Summary total ({summary['total']}) should match findings count ({len(findings)})"
-    )
-
-    # Verify individual severity counts match
-    severity_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
-    for f in findings:
-        severity_counts[f["severity"]] += 1
-
-    for level in ("critical", "high", "medium", "low", "info"):
-        assert summary[level] == severity_counts[level], (
-            f"Summary {level} count ({summary[level]}) != actual ({severity_counts[level]})"
-        )
+    # DNS findings should contribute to the total
+    dns = tr["results"]["dns"]
+    assert len(dns["findings"]) > 0, "DNS scanner should produce findings for google.com"
+    assert summary["total"] >= len(dns["findings"]), "Summary total should include DNS findings"

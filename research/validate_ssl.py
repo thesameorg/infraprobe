@@ -23,7 +23,10 @@ def check_result(result, expected):
             checks.append((result.error is None, f"error is None (got: {result.error!r})"))
         else:
             checks.append(
-                (result.error is not None and expected["error"] in result.error, f"error contains '{expected['error']}'")
+                (
+                    result.error is not None and expected["error"] in result.error,
+                    f"error contains '{expected['error']}'",
+                )
             )
 
     # Min findings count
@@ -49,9 +52,7 @@ def check_result(result, expected):
         max_allowed = _SEVERITY_ORDER[expected["max_severity"]]
         worst = max((_SEVERITY_ORDER.get(f.severity.value, 0) for f in result.findings), default=0)
         worst_name = next((name for name, val in _SEVERITY_ORDER.items() if val == worst), "none")
-        checks.append(
-            (worst <= max_allowed, f"worst severity <= '{expected['max_severity']}' (got: '{worst_name}')")
-        )
+        checks.append((worst <= max_allowed, f"worst severity <= '{expected['max_severity']}' (got: '{worst_name}')"))
 
     # Raw dict has expected keys
     if "raw_keys" in expected:

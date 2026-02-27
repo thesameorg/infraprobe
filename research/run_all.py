@@ -4,7 +4,6 @@
 import subprocess
 import sys
 
-
 VALIDATORS = [
     ("Headers", "validate_headers.py"),
     ("SSL", "validate_ssl.py"),

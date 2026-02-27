@@ -33,24 +33,25 @@ from typing import Any
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-from infraprobe.models import AuthConfig, CheckResult, CheckType  # noqa: E402
-from infraprobe.target import build_context  # noqa: E402
+from infraprobe.scanners.blacklist import scan as blacklist_scan  # noqa: E402
+from infraprobe.scanners.blacklist import scan_deep as blacklist_deep_scan  # noqa: E402
+from infraprobe.scanners.cve import scan as cve_scan  # noqa: E402
+from infraprobe.scanners.deep.dns import scan as dns_deep_scan  # noqa: E402
+from infraprobe.scanners.deep.ssl import scan as ssl_deep_scan  # noqa: E402
+from infraprobe.scanners.ports import scan as ports_scan  # noqa: E402
+from infraprobe.scanners.tech import scan as tech_scan  # noqa: E402
+
+from infraprobe.models import CheckResult, CheckType  # noqa: E402
+from infraprobe.scanners.dns import scan as dns_scan  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Import all scanner functions
 # ---------------------------------------------------------------------------
 from infraprobe.scanners.headers_drheader import scan as headers_scan  # noqa: E402
 from infraprobe.scanners.ssl import scan as ssl_scan  # noqa: E402
-from infraprobe.scanners.dns import scan as dns_scan  # noqa: E402
-from infraprobe.scanners.tech import scan as tech_scan  # noqa: E402
-from infraprobe.scanners.blacklist import scan as blacklist_scan  # noqa: E402
-from infraprobe.scanners.blacklist import scan_deep as blacklist_deep_scan  # noqa: E402
 from infraprobe.scanners.web import scan as web_scan  # noqa: E402
 from infraprobe.scanners.whois_scanner import scan as whois_scan  # noqa: E402
-from infraprobe.scanners.ports import scan as ports_scan  # noqa: E402
-from infraprobe.scanners.cve import scan as cve_scan  # noqa: E402
-from infraprobe.scanners.deep.ssl import scan as ssl_deep_scan  # noqa: E402
-from infraprobe.scanners.deep.dns import scan as dns_deep_scan  # noqa: E402
+from infraprobe.target import build_context  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -84,6 +85,7 @@ PORT_TARGETS = [t for t in DOMAIN_TARGETS if ":" in t]  # extract port-bearing t
 DOMAIN_TARGETS = [t for t in DOMAIN_TARGETS if ":" not in t]  # strip port targets from domains
 NMAP_TARGETS = _POOLS["nmap_subset"]
 
+
 # ---------------------------------------------------------------------------
 # Scanner registry
 # ---------------------------------------------------------------------------
@@ -104,35 +106,36 @@ class ScannerSpec:
 
 SCANNERS: list[ScannerSpec] = [
     # --- SMOKE: fast, lightweight checks ---
-    ScannerSpec("headers", CheckType.HEADERS, headers_scan, supports_auth=True,
-                use_domains=True, use_ips=False, phase="smoke"),
-    ScannerSpec("ssl", CheckType.SSL, ssl_scan,
-                use_domains=True, use_ips=False, phase="smoke"),
-    ScannerSpec("dns", CheckType.DNS, dns_scan,
-                use_domains=True, use_ips=False, phase="smoke"),
-    ScannerSpec("tech", CheckType.TECH, tech_scan, supports_auth=True,
-                use_domains=True, use_ips=False, phase="smoke"),
-    ScannerSpec("blacklist", CheckType.BLACKLIST, blacklist_scan,
-                use_domains=True, use_ips=True, phase="smoke"),
-    ScannerSpec("whois", CheckType.WHOIS, whois_scan,
-                use_domains=True, use_ips=False, phase="smoke"),
-
+    ScannerSpec(
+        "headers", CheckType.HEADERS, headers_scan, supports_auth=True, use_domains=True, use_ips=False, phase="smoke"
+    ),
+    ScannerSpec("ssl", CheckType.SSL, ssl_scan, use_domains=True, use_ips=False, phase="smoke"),
+    ScannerSpec("dns", CheckType.DNS, dns_scan, use_domains=True, use_ips=False, phase="smoke"),
+    ScannerSpec("tech", CheckType.TECH, tech_scan, supports_auth=True, use_domains=True, use_ips=False, phase="smoke"),
+    ScannerSpec("blacklist", CheckType.BLACKLIST, blacklist_scan, use_domains=True, use_ips=True, phase="smoke"),
+    ScannerSpec("whois", CheckType.WHOIS, whois_scan, use_domains=True, use_ips=False, phase="smoke"),
     # --- MEDIUM: deeper checks that still return inline ---
-    ScannerSpec("web", CheckType.WEB, web_scan, supports_auth=True,
-                use_domains=True, use_ips=False, phase="medium"),
-    ScannerSpec("ssl_deep", CheckType.SSL_DEEP, ssl_deep_scan,
-                use_domains=True, use_ips=False, use_port_targets=True, phase="medium"),
-    ScannerSpec("dns_deep", CheckType.DNS_DEEP, dns_deep_scan,
-                use_domains=True, use_ips=False, phase="medium"),
-    ScannerSpec("blacklist_deep", CheckType.BLACKLIST_DEEP, blacklist_deep_scan,
-                use_domains=True, use_ips=True, phase="medium"),
-
+    ScannerSpec("web", CheckType.WEB, web_scan, supports_auth=True, use_domains=True, use_ips=False, phase="medium"),
+    ScannerSpec(
+        "ssl_deep",
+        CheckType.SSL_DEEP,
+        ssl_deep_scan,
+        use_domains=True,
+        use_ips=False,
+        use_port_targets=True,
+        phase="medium",
+    ),
+    ScannerSpec("dns_deep", CheckType.DNS_DEEP, dns_deep_scan, use_domains=True, use_ips=False, phase="medium"),
+    ScannerSpec(
+        "blacklist_deep", CheckType.BLACKLIST_DEEP, blacklist_deep_scan, use_domains=True, use_ips=True, phase="medium"
+    ),
     # --- LONG: nmap-based, genuinely slow ---
-    ScannerSpec("ports", CheckType.PORTS, ports_scan,
-                use_domains=False, use_ips=True, use_nmap_targets=True, phase="long"),
-    ScannerSpec("cve", CheckType.CVE, cve_scan,
-                use_domains=False, use_ips=True, use_nmap_targets=True, phase="long"),
+    ScannerSpec(
+        "ports", CheckType.PORTS, ports_scan, use_domains=False, use_ips=True, use_nmap_targets=True, phase="long"
+    ),
+    ScannerSpec("cve", CheckType.CVE, cve_scan, use_domains=False, use_ips=True, use_nmap_targets=True, phase="long"),
 ]
+
 
 # ---------------------------------------------------------------------------
 # Data collection
@@ -220,9 +223,7 @@ async def resolve_target(raw: str) -> str:
 # ---------------------------------------------------------------------------
 # Single run
 # ---------------------------------------------------------------------------
-async def run_single(
-    spec: ScannerSpec, target_raw: str, timeout: float = BENCHMARK_TIMEOUT
-) -> RunResult:
+async def run_single(spec: ScannerSpec, target_raw: str, timeout: float = BENCHMARK_TIMEOUT) -> RunResult:
     """Run a single scanner against a single target, measure wall time."""
     # Resolve target like the real pipeline does
     target = await resolve_target(target_raw)
@@ -242,7 +243,7 @@ async def run_single(
             error=result.error,
             findings_count=len(result.findings),
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         elapsed_ms = (time.monotonic() - start) * 1000
         return RunResult(
             scanner=spec.name,
@@ -299,7 +300,7 @@ async def run_phase(phase: str, repeat: int = 1) -> tuple[list[RunResult], list[
 
         for iteration in range(repeat):
             for i, target in enumerate(targets):
-                label = f"    [{iteration+1}/{repeat}] [{i+1}/{len(targets)}] {spec.name} → {target}"
+                label = f"    [{iteration + 1}/{repeat}] [{i + 1}/{len(targets)}] {spec.name} → {target}"
                 print(f"{label} ...", end=" ", flush=True)
 
                 result = await run_single(spec, target)
@@ -353,40 +354,46 @@ def save_results(all_results: list[RunResult], all_stats: list[ScannerStats], ti
     # Raw results CSV
     csv_path = RESULTS_DIR / f"raw_{timestamp}.csv"
     with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["scanner", "target", "duration_ms", "success", "error", "findings_count", "timeout_hit"])
+        writer = csv.DictWriter(
+            f, fieldnames=["scanner", "target", "duration_ms", "success", "error", "findings_count", "timeout_hit"]
+        )
         writer.writeheader()
         for r in all_results:
-            writer.writerow({
-                "scanner": r.scanner,
-                "target": r.target,
-                "duration_ms": round(r.duration_ms, 1),
-                "success": r.success,
-                "error": r.error or "",
-                "findings_count": r.findings_count,
-                "timeout_hit": r.timeout_hit,
-            })
+            writer.writerow(
+                {
+                    "scanner": r.scanner,
+                    "target": r.target,
+                    "duration_ms": round(r.duration_ms, 1),
+                    "success": r.success,
+                    "error": r.error or "",
+                    "findings_count": r.findings_count,
+                    "timeout_hit": r.timeout_hit,
+                }
+            )
     print(f"\nRaw results saved to: {csv_path}")
 
     # Stats JSON
     stats_path = RESULTS_DIR / f"stats_{timestamp}.json"
     stats_data = []
     for s in all_stats:
-        stats_data.append({
-            "scanner": s.scanner,
-            "phase": s.phase,
-            "runs": s.runs,
-            "successes": s.successes,
-            "errors": s.errors,
-            "timeouts": s.timeouts,
-            "p50_ms": round(s.p50, 1),
-            "p75_ms": round(s.p75, 1),
-            "p90_ms": round(s.p90, 1),
-            "p95_ms": round(s.p95, 1),
-            "p99_ms": round(s.p99, 1),
-            "mean_ms": round(s.mean, 1),
-            "min_ms": round(s.min_ms, 1),
-            "max_ms": round(s.max_ms, 1),
-        })
+        stats_data.append(
+            {
+                "scanner": s.scanner,
+                "phase": s.phase,
+                "runs": s.runs,
+                "successes": s.successes,
+                "errors": s.errors,
+                "timeouts": s.timeouts,
+                "p50_ms": round(s.p50, 1),
+                "p75_ms": round(s.p75, 1),
+                "p90_ms": round(s.p90, 1),
+                "p95_ms": round(s.p95, 1),
+                "p99_ms": round(s.p99, 1),
+                "mean_ms": round(s.mean, 1),
+                "min_ms": round(s.min_ms, 1),
+                "max_ms": round(s.max_ms, 1),
+            }
+        )
     with open(stats_path, "w") as f:
         json.dump(stats_data, f, indent=2)
     print(f"Stats saved to: {stats_path}")
@@ -426,7 +433,9 @@ def save_results(all_results: list[RunResult], all_stats: list[ScannerStats], ti
         f.write("|---------|--------|----------|---------|----------|-------|\n")
         for r in all_results:
             err = (r.error or "")[:50]
-            f.write(f"| {r.scanner} | {r.target} | {r.duration_ms:.0f}ms | {r.success} | {r.findings_count} | {err} |\n")
+            f.write(
+                f"| {r.scanner} | {r.target} | {r.duration_ms:.0f}ms | {r.success} | {r.findings_count} | {err} |\n"
+            )
 
     print(f"Summary saved to: {md_path}")
 
@@ -444,8 +453,9 @@ PHASE_CONFIG = {
 
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Scanner latency benchmark")
-    parser.add_argument("--phase", choices=["smoke", "medium", "long", "all"], default="all",
-                        help="Which phase to run (default: all)")
+    parser.add_argument(
+        "--phase", choices=["smoke", "medium", "long", "all"], default="all", help="Which phase to run (default: all)"
+    )
     args = parser.parse_args()
 
     phases = ["smoke", "medium", "long"] if args.phase == "all" else [args.phase]
@@ -485,7 +495,7 @@ async def main() -> int:
     save_results(all_results, all_stats, timestamp)
 
     total_time = sum(r.duration_ms for r in all_results) / 1000
-    print(f"\nTotal benchmark time: {total_time:.0f}s ({total_time/60:.1f}min)")
+    print(f"\nTotal benchmark time: {total_time:.0f}s ({total_time / 60:.1f}min)")
     print(f"Total runs: {len(all_results)}")
 
     return 0

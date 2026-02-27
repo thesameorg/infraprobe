@@ -13,7 +13,7 @@ Every scanner is a single async function:
 async def scan(target: str, timeout: float, auth=None) -> CheckResult
 ```
 
-The `auth` parameter is an `AuthConfig | None` (see `models.py`). HTTP-based scanners (headers, tech, web) pass it to `scanner_client(timeout, auth=auth)`. Non-HTTP scanners accept the parameter but ignore it.
+The `auth` parameter is an `AuthConfig | None` (see `models.py`). HTTP-based scanners (headers, web) pass it to `scanner_client(timeout, auth=auth)`. Non-HTTP scanners accept the parameter but ignore it.
 
 The `target` string is the normalized host (or host:port). A `ScanContext` (from `infraprobe.target`) is available in the orchestrator with pre-resolved IPs and `is_ip` flag, but scanners receive the target as a plain string.
 
@@ -27,11 +27,9 @@ The `target` string is the normalized host (or host:port). A `ScanContext` (from
 
 4. **Findings = problems + positive confirmations.** Report issues that need attention (CRITICAL through LOW), and add `Severity.INFO` findings for things configured correctly (e.g. "TLS 1.3 supported", "DNSSEC enabled", "DMARC policy is reject"). This lets users see what's right, not just what's wrong. Use the `raw` dict for neutral/diagnostic data (response headers, cert details, DNS records).
 
-5. **Stateless.** No module-level state, no connection pools, no caches. Receive target + timeout, return result. For HTTP-based scanners, use the shared client from `http.py` (`scanner_client` + `fetch_with_fallback`) instead of creating ad-hoc httpx clients. Use `scanner_client(timeout, follow_redirects=False)` when the scanner needs to analyze the target's own response (e.g. headers scanner), or leave the default (`True`) when the scanner needs final-page content (e.g. tech detection).
+5. **Stateless.** No module-level state, no connection pools, no caches. Receive target + timeout, return result. For HTTP-based scanners, use the shared client from `http.py` (`scanner_client` + `fetch_with_fallback`) instead of creating ad-hoc httpx clients. Use `scanner_client(timeout, follow_redirects=False)` when the scanner needs to analyze the target's own response (e.g. headers scanner), or leave the default (`True`) when the scanner needs final-page content.
 
 6. **Deterministic check type.** Always return `CheckResult(check=CheckType.YOUR_TYPE, ...)`. The check field must match the scanner's registered type.
-
-7. **Nmap concurrency limit.** Scanners that spawn nmap subprocesses (via `asyncio.to_thread`) must acquire the shared semaphore first: `async with nmap_semaphore(): await asyncio.to_thread(...)`. Import from `infraprobe.config`. This prevents OOM when multiple nmap-based scans run concurrently.
 
 ---
 
@@ -45,8 +43,7 @@ Request timeout (uvicorn/Cloud Run: 300s)
 
 | Constant | Value | Location | Purpose |
 |----------|-------|----------|---------|
-| `settings.scanner_timeout` | `10.0s` | `config.py` | Per-scanner budget for light checks |
-| `settings.deep_scanner_timeout` | `30.0s` | `config.py` | Per-scanner budget for deep checks (`ssl_deep`, `dns_deep`, `blacklist_deep`, `cve`) |
+| `settings.scanner_timeout` | `10.0s` | `config.py` | Per-scanner budget |
 | `_SCHEDULING_BUFFER` | `0.5s` | `api/scan.py` | Buffer for asyncio task-switch latency only |
 
 **Rules:**
@@ -81,12 +78,10 @@ Scanners must handle their own errors. The orchestrator provides a safety net bu
 1. Create `src/infraprobe/scanners/{name}.py`
 2. Implement `async def scan(target: str, timeout: float, auth=None) -> CheckResult` following this contract
 3. For HTTP-based scanners, use `scanner_client(timeout, auth=auth)` and `fetch_with_fallback(target, client)` from `infraprobe.http` — do not duplicate the HTTPS-first/HTTP-fallback pattern. Non-HTTP scanners should accept `auth` but ignore it.
-4. Add enum value to `CheckType` in `models.py` if needed
+4. Add enum value to `CheckType` in `models.py`
 5. Register in `app.py`: `register_scanner(CheckType.{NAME}, {name}.scan)`
-6. Add integration test in `tests/test_scan.py` against a real target
-
-What you don't need to change:
-- `api/scan.py` — handles any registered scanner automatically. Individual endpoints (`/v1/check/{type}`) are generated from `CheckType` at import time, so new enum values get their own route automatically. Fast checks return 200 inline; slow checks (ssl_deep, cve) return 202 with a job ID. New scanners are NOT automatically added to the bundle scan — the bundle runs a fixed set (headers, ssl, dns, web, whois for domains; headers, ssl, web for IPs). To include a new scanner in the bundle, update `DOMAIN_CHECKS`/`IP_CHECKS` in `models.py`.
+6. To include the scanner in the bundle scan, update `DOMAIN_CHECKS`/`IP_CHECKS` in `models.py`
+7. Add integration test in `tests/test_scan.py` against a real target
 
 ---
 
@@ -99,8 +94,6 @@ What you don't need to change:
 **Request takes too long:** Check `duration_ms` in `TargetResult`. All scanners run in parallel, so total time ≈ slowest scanner. Validate with `INFRAPROBE_SCANNER_TIMEOUT=2`.
 
 **DNS scanner:** Each DNS query creates its own `Resolver` instance with an independent `lifetime` budget, so one slow query (e.g. large TXT response) cannot exhaust the timeout for others. All queries still run in parallel via `asyncio.gather`.
-
-**`ModuleNotFoundError` for a third-party submodule in Docker:** The Dockerfile strips heavy/unused dependencies (e.g. `selenium`, `wappalyzer/browser`) to shrink the image. If a library's `__init__.py` unconditionally imports the stripped submodule, any import of that library — even a different submodule — will fail. Fix: stub the stripped module in `sys.modules` before importing. See `scanners/deep/tech.py` for the `wappalyzer.browser` stub pattern.
 
 ---
 

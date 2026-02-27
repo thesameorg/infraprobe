@@ -52,7 +52,10 @@ def check_result(result, expected):
                 if "policy" in expected["dmarc"] and dmarc_data:
                     record = dmarc_data if isinstance(dmarc_data, str) else str(dmarc_data)
                     checks.append(
-                        (expected["dmarc"]["policy"] in record, f"DMARC policy contains '{expected['dmarc']['policy']}'")
+                        (
+                            expected["dmarc"]["policy"] in record,
+                            f"DMARC policy contains '{expected['dmarc']['policy']}'",
+                        )
                     )
             else:
                 checks.append((not dmarc_data, "DMARC record absent (expected missing)"))

@@ -97,14 +97,22 @@ def run_scenario(
     html_file = log_dir / f"{scenario}.html"
 
     cmd = [
-        sys.executable, "-m", "locust",
-        "-f", str(LOCUSTFILE),
-        "--host", host,
+        sys.executable,
+        "-m",
+        "locust",
+        "-f",
+        str(LOCUSTFILE),
+        "--host",
+        host,
         "--headless",
-        "-u", str(users),
-        "-r", str(rate),
-        "-t", duration,
-        "--html", str(html_file),
+        "-u",
+        str(users),
+        "-r",
+        str(rate),
+        "-t",
+        duration,
+        "--html",
+        str(html_file),
         scenario,
     ]
 
@@ -187,7 +195,7 @@ def main():
     log_dir = LOGS_DIR / f"{ts}_{host_label}_{tag}"
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"InfraProbe Load Test")
+    print("InfraProbe Load Test")
     print(f"  Host:      {args.host}")
     print(f"  Preset:    {args.preset} ({len(scenarios)} scenario{'s' if len(scenarios) > 1 else ''})")
     print(f"  Auth:      {'yes' if secret else 'no'}")

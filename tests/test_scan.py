@@ -1,20 +1,21 @@
 """Integration tests: hit real targets, verify real results."""
 
 import pytest
-from helpers import submit_check, submit_scan
+from helpers import submit_scan
 
 pytestmark = pytest.mark.integration
 
 
 def test_scan_headers_vulnweb(client):
     """Scan deliberately vulnerable site — should find missing security headers + info leaks."""
-    result = submit_check(client, "headers", {"target": "testphp.vulnweb.com"})
+    result = submit_scan(client, {"target": "testphp.vulnweb.com"})
+    target = result["results"][0]
 
-    assert result["target"] == "testphp.vulnweb.com"
-    assert result["duration_ms"] > 0
+    assert target["target"] == "testphp.vulnweb.com"
+    assert target["duration_ms"] > 0
 
     # vulnweb leaks Server and X-Powered-By, so we expect findings
-    headers_result = result["results"]["headers"]
+    headers_result = target["results"]["headers"]
     assert headers_result["error"] is None
     titles = [f["title"] for f in headers_result["findings"]]
 
@@ -49,8 +50,9 @@ def test_scan_missing_target(client):
 @pytest.mark.slow
 def test_scan_example_com(client):
     """Scan example.com — different profile than vulnweb."""
-    result = submit_check(client, "headers", {"target": "example.com"})
-    assert len(result["results"]["headers"]["findings"]) > 0
+    result = submit_scan(client, {"target": "example.com"})
+    target = result["results"][0]
+    assert len(target["results"]["headers"]["findings"]) > 0
 
 
 # --- SSL scanner tests ---
@@ -58,9 +60,10 @@ def test_scan_example_com(client):
 
 def test_scan_ssl_valid_cert(client):
     """Scan a site with a valid TLS certificate — should have no critical/high findings."""
-    result = submit_check(client, "ssl", {"target": "example.com"})
+    result = submit_scan(client, {"target": "example.com"})
+    target = result["results"][0]
 
-    ssl_result = result["results"]["ssl"]
+    ssl_result = target["results"]["ssl"]
     assert ssl_result["error"] is None
 
     # Valid cert should not have critical findings
@@ -80,21 +83,6 @@ def test_scan_ssl_valid_cert(client):
     assert len(raw["san"]) > 0
 
 
-def test_scan_ssl_google(client):
-    """Scan google.com — cert data should be present in raw."""
-    result = submit_check(client, "ssl", {"target": "google.com"})
-
-    ssl_result = result["results"]["ssl"]
-    assert ssl_result["error"] is None
-
-    raw = ssl_result["raw"]
-    assert raw["host"] == "google.com"
-    assert raw["issuer"] != ""
-    assert raw["subject"] != ""
-    assert raw["not_valid_before"] != ""
-    assert raw["not_valid_after"] != ""
-
-
 def test_scan_ssl_combined(client):
     """Default scan includes both headers and SSL — both results should be present."""
     data = submit_scan(client, {"target": "example.com"})
@@ -106,23 +94,15 @@ def test_scan_ssl_combined(client):
     assert result["results"]["ssl"]["error"] is None
 
 
-def test_scan_ssl_no_tls(client):
-    """Scan a target on port 80 (no TLS) — should return a graceful error."""
-    result = submit_check(client, "ssl", {"target": "example.com:80"})
-
-    ssl_result = result["results"]["ssl"]
-    assert ssl_result["error"] is not None
-    assert ssl_result["findings"] == []
-
-
 # --- DNS scanner tests ---
 
 
 def test_scan_dns_google(client):
     """Scan google.com DNS — should resolve records and return raw data."""
-    result = submit_check(client, "dns", {"target": "google.com"})
+    data = submit_scan(client, {"target": "google.com"})
+    target = data["results"][0]
 
-    dns_result = result["results"]["dns"]
+    dns_result = target["results"]["dns"]
     assert dns_result["error"] is None
 
     raw = dns_result["raw"]
@@ -137,9 +117,10 @@ def test_scan_dns_google(client):
 
 def test_scan_dns_spf_dmarc(client):
     """Scan google.com DNS — should have SPF and DMARC (no findings for missing)."""
-    result = submit_check(client, "dns", {"target": "google.com"})
+    data = submit_scan(client, {"target": "google.com"})
+    target = data["results"][0]
 
-    dns_result = result["results"]["dns"]
+    dns_result = target["results"]["dns"]
     assert dns_result["error"] is None
 
     titles = [f["title"] for f in dns_result["findings"]]
@@ -166,56 +147,6 @@ def test_scan_dns_combined(client):
     assert result["results"]["headers"]["error"] is None
 
 
-def test_scan_dns_strips_port(client):
-    """DNS scanner should ignore port in target."""
-    result = submit_check(client, "dns", {"target": "google.com:443"})
-
-    dns_result = result["results"]["dns"]
-    assert dns_result["error"] is None
-    assert dns_result["raw"]["domain"] == "google.com"
-
-
-# --- Tech detection scanner tests ---
-
-
-def test_scan_tech_vulnweb(client):
-    """Scan vulnweb — Wappalyzer should detect server tech."""
-    result = submit_check(client, "tech", {"target": "testphp.vulnweb.com"})
-
-    tech_result = result["results"]["tech"]
-    assert tech_result["error"] is None
-
-    raw = tech_result["raw"]
-    assert raw["technologies_count"] > 0
-    detected_names = {t["name"].lower() for t in raw["detected"]}
-    # Wappalyzer should detect at least one known technology
-    assert len(detected_names) > 0, f"Expected at least one technology, got: {detected_names}"
-
-
-def test_scan_tech_google(client):
-    """Scan google.com — should detect something (at least a web server or CDN)."""
-    result = submit_check(client, "tech", {"target": "google.com"})
-
-    tech_result = result["results"]["tech"]
-    assert tech_result["error"] is None
-    assert isinstance(tech_result["raw"]["detected"], list)
-
-
-def test_scan_tech_raw_structure(client):
-    """Verify tech scanner raw data structure."""
-    result = submit_check(client, "tech", {"target": "example.com"})
-
-    tech_result = result["results"]["tech"]
-    assert tech_result["error"] is None
-
-    raw = tech_result["raw"]
-    assert "url" in raw
-    assert "detected" in raw
-    assert "technologies_count" in raw
-    assert isinstance(raw["detected"], list)
-    assert raw["technologies_count"] == len(raw["detected"])
-
-
 def test_scan_all_checks(client):
     """Default domain scan runs all 5 default checks."""
     data = submit_scan(client, {"target": "example.com"})
@@ -225,69 +156,6 @@ def test_scan_all_checks(client):
         assert check in result["results"], f"Missing result for {check}"
         error = result["results"][check]["error"]
         assert error is None, f"{check} returned error: {error}"
-
-
-# --- Blacklist (DNSBL) scanner tests ---
-
-
-def test_scan_blacklist_google(client):
-    """Light blacklist scan — 2 major DNSBL sources, should be fast."""
-    result = submit_check(client, "blacklist", {"target": "google.com"})
-
-    bl_result = result["results"]["blacklist"]
-    if bl_result["error"] and "timed out" in bl_result["error"]:
-        pytest.skip("DNSBL timed out (CI environment)")
-
-    assert bl_result["error"] is None
-
-    raw = bl_result["raw"]
-    assert raw["ip"] != ""
-    assert raw["total_checked"] == 2  # light = 2 major sources
-    assert isinstance(raw["listings"], dict)
-    for zone, status in raw["listings"].items():
-        assert status in ("listed", "clean", "timeout"), f"Unexpected status for {zone}: {status}"
-
-
-def test_scan_blacklist_raw_structure(client):
-    """Verify blacklist scanner raw data structure."""
-    result = submit_check(client, "blacklist", {"target": "example.com"})
-
-    bl_result = result["results"]["blacklist"]
-    if bl_result["error"] and "timed out" in bl_result["error"]:
-        pytest.skip("DNSBL timed out (CI environment)")
-
-    assert bl_result["error"] is None
-
-    raw = bl_result["raw"]
-    assert "ip" in raw
-    assert "reversed_ip" in raw
-    assert "listings" in raw
-    assert "listed_count" in raw
-    assert "total_checked" in raw
-    # Verify reverse IP format
-    octets = raw["ip"].split(".")
-    reversed_octets = raw["reversed_ip"].split(".")
-    assert octets == list(reversed(reversed_octets))
-
-
-def test_scan_blacklist_deep(client):
-    """Deep blacklist scan — all 15 DNSBL sources with per-zone timeout."""
-    result = submit_check(client, "blacklist_deep", {"target": "google.com"})
-
-    bl_result = result["results"]["blacklist_deep"]
-    if bl_result["error"] and "timed out" in bl_result["error"]:
-        pytest.skip("DNSBL timed out (CI environment)")
-
-    assert bl_result["error"] is None
-
-    raw = bl_result["raw"]
-    assert raw["ip"] != ""
-    # Deep checks all 15 sources, some may timeout
-    assert raw["total_checked"] > 5
-    assert isinstance(raw["listings"], dict)
-    assert len(raw["listings"]) == 15  # all zones attempted
-    for zone, status in raw["listings"].items():
-        assert status in ("listed", "clean", "timeout"), f"Unexpected status for {zone}: {status}"
 
 
 # --- /v1/ API prefix tests ---
@@ -309,131 +177,18 @@ def test_v1_default_checks_are_light(client):
     result = data["results"][0]
     expected = {"headers", "ssl", "dns", "web", "whois"}
     assert set(result["results"].keys()) == expected
-    # Should NOT have deep or deprecated checks
-    assert "ssl_deep" not in result["results"]
-    assert "dns_deep" not in result["results"]
-    assert "tech" not in result["results"]
-    assert "blacklist" not in result["results"]
-
-
-# --- Deep scanner tests ---
-
-
-def test_scan_ssl_deep(client):
-    """SSL deep scan (SSLyze) — should return protocol/vuln data."""
-    result = submit_check(client, "ssl_deep", {"target": "example.com"})
-
-    ssl_result = result["results"]["ssl_deep"]
-    assert ssl_result["error"] is None
-
-    raw = ssl_result["raw"]
-    assert raw["host"] == "example.com"
-    assert len(raw["supported_protocols"]) > 0
-    assert "vulnerabilities" in raw
-    assert raw["vulnerabilities"]["heartbleed"] is False
-
-
-def test_scan_dns_deep(client):
-    """DNS deep scan (checkdmarc) — should return SPF/DMARC/DNSSEC data."""
-    result = submit_check(client, "dns_deep", {"target": "google.com"})
-
-    dns_result = result["results"]["dns_deep"]
-    assert dns_result["error"] is None
-
-    raw = dns_result["raw"]
-    assert raw["domain"] == "google.com"
-    assert "spf" in raw
-    if raw["spf"] is not None:  # may be None on weak DNS resolvers
-        assert "v=spf1" in raw["spf"].lower()
-    assert "dmarc" in raw
-    if raw["dmarc"] is not None:  # may be None on weak DNS resolvers
-        assert "v=dmarc1" in raw["dmarc"].lower()
-        assert raw["dmarc_policy"] == "reject"
-    assert "dnssec" in raw
-
-
-def test_scan_tech_wappalyzer(client):
-    """Tech scan (wappalyzer) — should detect technologies."""
-    result = submit_check(client, "tech", {"target": "example.com"})
-
-    tech_result = result["results"]["tech"]
-    assert tech_result["error"] is None
-
-    raw = tech_result["raw"]
-    assert "detected" in raw
-    assert "technologies_count" in raw
-    assert isinstance(raw["detected"], list)
-
-
-# --- Single-check endpoint tests ---
-
-
-def test_check_headers(client):
-    """POST /v1/check/headers — returns a single TargetResult inline (200)."""
-    resp = client.post("/v1/check/headers", json={"target": "example.com"})
-    assert resp.status_code == 200
-
-    data = resp.json()
-    assert data["target"] == "example.com"
-    assert "headers" in data["results"]
-    assert data["results"]["headers"]["error"] is None
-    assert data["duration_ms"] > 0
-
-
-def test_check_ssl(client):
-    """POST /v1/check/ssl — returns SSL result for a single target inline (200)."""
-    resp = client.post("/v1/check/ssl", json={"target": "example.com"})
-    assert resp.status_code == 200
-
-    data = resp.json()
-    assert data["target"] == "example.com"
-    assert "ssl" in data["results"]
-    assert data["results"]["ssl"]["error"] is None
-
-
-def test_check_dns(client):
-    """POST /v1/check/dns — returns DNS result for a single target inline (200)."""
-    resp = client.post("/v1/check/dns", json={"target": "google.com"})
-    assert resp.status_code == 200
-
-    data = resp.json()
-    assert data["target"] == "google.com"
-    assert "dns" in data["results"]
-    assert data["results"]["dns"]["error"] is None
-
-
-def test_check_invalid_type(client):
-    """POST /v1/check/nonexistent — no matching route, should return 404."""
-    resp = client.post("/v1/check/nonexistent", json={"target": "example.com"})
-    assert resp.status_code == 404
-
-
-def test_check_blocked_target(client):
-    """POST /v1/check/headers with blocked IP — should return 400."""
-    resp = client.post("/v1/check/headers", json={"target": "127.0.0.1"})
-    assert resp.status_code == 400
-    body = resp.json()
-    assert "blocked" in body["detail"].lower()
-    assert body["error"] == "blocked_target"
-
-
-def test_unversioned_scan_removed(client):
-    """Unversioned /scan should no longer be routed — expect 404."""
-    resp = client.post("/scan", json={"target": "example.com"})
-    assert resp.status_code == 404
 
 
 # --- Web scanner tests ---
 
 
-def test_check_web_vulnweb(client):
+def test_scan_web_vulnweb(client):
     """Web scan of vulnweb — should find CORS/path/security.txt findings."""
-    resp = client.post("/v1/check/web", json={"target": "testphp.vulnweb.com"})
-    assert resp.status_code == 200
+    data = submit_scan(client, {"target": "testphp.vulnweb.com"})
+    target = data["results"][0]
 
-    data = resp.json()
-    assert data["target"] == "testphp.vulnweb.com"
-    web_result = data["results"]["web"]
+    assert target["target"] == "testphp.vulnweb.com"
+    web_result = target["results"]["web"]
     assert web_result["error"] is None
 
     # Should have findings (at minimum security.txt missing and path probe results)
@@ -449,29 +204,18 @@ def test_check_web_vulnweb(client):
     assert isinstance(raw["exposed_paths"], list)
 
 
-def test_check_web_example_com(client):
+def test_scan_web_example_com(client):
     """Web scan of example.com — well-configured site."""
-    resp = client.post("/v1/check/web", json={"target": "example.com"})
-    assert resp.status_code == 200
+    data = submit_scan(client, {"target": "example.com"})
+    target = data["results"][0]
 
-    data = resp.json()
-    web_result = data["results"]["web"]
+    web_result = target["results"]["web"]
     assert web_result["error"] is None
 
     raw = web_result["raw"]
     assert raw["url"].startswith("http")
     assert "status_code" in raw
     assert "security_txt" in raw
-
-
-def test_check_web_cors_raw(client):
-    """Web scan should include CORS details in raw data."""
-    resp = client.post("/v1/check/web", json={"target": "example.com"})
-    assert resp.status_code == 200
-
-    raw = resp.json()["results"]["web"]["raw"]
-    assert "cors" in raw
-    assert "access_control_allow_origin" in raw["cors"]
 
 
 def test_scan_includes_web_check(client):
@@ -508,166 +252,10 @@ def test_scan_ip_auto_detect_uses_ip_checks(client):
     assert "web" in result["results"]
 
 
-def test_check_headers_works_for_ip(client):
-    """POST /v1/check/headers with an IP — should work (headers are not DNS-only)."""
-    resp = client.post("/v1/check/headers", json={"target": "44.228.249.3"})
-    # 200 = inline result; scan succeeds or returns graceful error, not 422
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["target"] == "44.228.249.3"
-    assert "headers" in data["results"]
-
-
-def test_check_dns_rejected_for_ip(client):
-    """POST /v1/check/dns with an IP — dns is DNS-only, should return 422."""
-    resp = client.post("/v1/check/dns", json={"target": "44.228.249.3"})
-    assert resp.status_code == 422
-
-
-# --- Port scanner tests ---
-
-
-def test_check_ports_scanme(client):
-    """Light port scan of scanme.nmap.org — should find open ports with correct raw structure."""
-    result = submit_check(client, "ports", {"target": "scanme.nmap.org"})
-
-    assert result["target"] == "scanme.nmap.org"
-    ports_result = result["results"]["ports"]
-    assert ports_result["error"] is None
-
-    raw = ports_result["raw"]
-    assert "host" in raw
-    assert "open_ports" in raw
-    assert "open_count" in raw
-    assert "command_line" in raw
-    assert isinstance(raw["open_ports"], list)
-    assert raw["open_count"] == len(raw["open_ports"])
-    # scanme.nmap.org should have at least port 22 or 80 open
-    assert raw["open_count"] > 0, f"Expected open ports on scanme.nmap.org, got: {raw}"
-
-    # Verify port entry structure
-    port_entry = raw["open_ports"][0]
-    assert "port" in port_entry
-    assert "protocol" in port_entry
-    assert "state" in port_entry
-    assert "service" in port_entry
-    assert port_entry["state"] == "open"
-
-
-def test_ports_not_in_default_checks(client):
-    """Ports check should NOT be in default checks (it's opt-in like web)."""
-    data = submit_scan(client, {"target": "example.com"})
-    result = data["results"][0]
-    assert "ports" not in result["results"]
-
-
-def test_ports_via_individual_check(client):
-    """Ports check available via individual /v1/check/ports endpoint."""
-    result = submit_check(client, "ports", {"target": "scanme.nmap.org"})
-    assert "ports" in result["results"]
-    assert result["results"]["ports"]["error"] is None
-
-
-def test_ports_risk_classification(client):
-    """Severity values should be valid, and well-known services classified correctly."""
-    result = submit_check(client, "ports", {"target": "scanme.nmap.org"})
-
-    ports_result = result["results"]["ports"]
-    assert ports_result["error"] is None
-
-    valid_severities = {"critical", "high", "medium", "low", "info"}
-    for finding in ports_result["findings"]:
-        assert finding["severity"] in valid_severities, f"Invalid severity: {finding['severity']}"
-
-    # SSH (port 22) should be classified as info if present
-    ssh_findings = [f for f in ports_result["findings"] if f.get("details", {}).get("port") == 22]
-    if ssh_findings:
-        assert ssh_findings[0]["severity"] == "info"
-
-
-def test_check_ports_blocked_target(client):
-    """Port scan of blocked target (127.0.0.1) — SSRF protection should return 400."""
-    resp = client.post("/v1/check/ports", json={"target": "127.0.0.1"})
-    assert resp.status_code == 400
-    body = resp.json()
-    assert "blocked" in body["detail"].lower()
-    assert body["error"] == "blocked_target"
-
-
-# --- CVE scanner tests ---
-
-
-def test_check_cve_scanme(client):
-    """CVE scan of scanme.nmap.org — should detect services and query NVD for CVEs."""
-    result = submit_check(client, "cve", {"target": "scanme.nmap.org"})
-
-    assert result["target"] == "scanme.nmap.org"
-    cve_result = result["results"]["cve"]
-    assert cve_result["error"] is None
-
-    raw = cve_result["raw"]
-    assert "host" in raw
-    assert "services_scanned" in raw
-    assert "cves_found" in raw
-    assert isinstance(raw.get("services", []), list)
-    assert isinstance(raw.get("cves", []), list)
-
-    # scanme.nmap.org runs old Apache — expect version-detected services and CVEs
-    if raw["services_scanned"] > 0:
-        svc = raw["services"][0]
-        assert "port" in svc
-        assert "product" in svc
-        assert "version" in svc
-        assert "cpe" in svc
-
-    if raw["cves_found"] > 0:
-        cve_entry = raw["cves"][0]
-        assert "cve_id" in cve_entry
-        assert cve_entry["cve_id"].startswith("CVE-")
-        assert "cvss_score" in cve_entry
-        assert "severity" in cve_entry
-        assert "product" in cve_entry
-
-
-def test_check_cve_findings_structure(client):
-    """CVE findings should have valid severities and CVE details."""
-    result = submit_check(client, "cve", {"target": "scanme.nmap.org"})
-
-    cve_result = result["results"]["cve"]
-    assert cve_result["error"] is None
-    assert len(cve_result["findings"]) > 0
-
-    valid_severities = {"critical", "high", "medium", "low", "info"}
-    for finding in cve_result["findings"]:
-        assert finding["severity"] in valid_severities
-        # CVE findings should have details with cve_id (unless it's the "no CVEs" info finding)
-        if finding["severity"] != "info":
-            assert "cve_id" in finding["details"]
-            assert finding["details"]["cve_id"].startswith("CVE-")
-            assert isinstance(finding["details"]["cvss_score"], (int, float))
-
-
-def test_cve_via_individual_check(client):
-    """CVE check available via individual /v1/check/cve endpoint."""
-    result = submit_check(client, "cve", {"target": "scanme.nmap.org"})
-    assert "cve" in result["results"]
-    assert result["results"]["cve"]["error"] is None
-
-
-def test_cve_not_in_default_checks(client):
-    """CVE check should NOT be in default checks (it's opt-in like ports)."""
-    data = submit_scan(client, {"target": "example.com"})
-    result = data["results"][0]
-    assert "cve" not in result["results"]
-
-
-def test_check_cve_blocked_target(client):
-    """CVE scan of blocked target (127.0.0.1) — SSRF protection should return 400."""
-    resp = client.post("/v1/check/cve", json={"target": "127.0.0.1"})
-    assert resp.status_code == 400
-    body = resp.json()
-    assert "blocked" in body["detail"].lower()
-    assert body["error"] == "blocked_target"
+def test_unversioned_scan_removed(client):
+    """Unversioned /scan should no longer be routed — expect 404."""
+    resp = client.post("/scan", json={"target": "example.com"})
+    assert resp.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -677,9 +265,10 @@ def test_check_cve_blocked_target(client):
 
 def test_scan_whois_google(client):
     """WHOIS lookup for google.com — should return registrar, dates, and no errors."""
-    result = submit_check(client, "whois", {"target": "google.com"})
+    data = submit_scan(client, {"target": "google.com"})
+    target = data["results"][0]
 
-    whois_result = result["results"]["whois"]
+    whois_result = target["results"]["whois"]
     assert whois_result["error"] is None
 
     raw = whois_result["raw"]
@@ -702,9 +291,3 @@ def test_scan_whois_in_default_domain_checks(client):
     data = submit_scan(client, {"target": "google.com"})
     result = data["results"][0]
     assert "whois" in result["results"], f"whois missing from default scan, got: {list(result['results'].keys())}"
-
-
-def test_scan_whois_rejected_for_ip(client):
-    """WHOIS is domain-only (DNS_ONLY_CHECKS) — IP target should return 422."""
-    resp = client.post("/v1/check/whois", json={"target": "8.8.8.8"})
-    assert resp.status_code == 422

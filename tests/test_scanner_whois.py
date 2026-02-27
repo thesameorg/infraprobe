@@ -2,17 +2,23 @@
 
 import pytest
 
+from tests.helpers import submit_scan
+
 pytestmark = pytest.mark.integration
+
+
+def _whois_result(client, target: str) -> dict:
+    """Run a bundle scan on a domain and return the TargetResult dict."""
+    data = submit_scan(client, {"target": target})
+    return data["results"][0]
 
 
 def test_whois_google(client):
     """Scan google.com — should return registrar info, created/expires dates."""
-    resp = client.post("/v1/check/whois", json={"target": "google.com"})
-    assert resp.status_code == 200
+    tr = _whois_result(client, "google.com")
+    assert tr["target"] == "google.com"
 
-    data = resp.json()
-    assert data["target"] == "google.com"
-    whois_result = data["results"]["whois"]
+    whois_result = tr["results"]["whois"]
     assert whois_result["error"] is None
 
     # Should have meaningful findings
@@ -31,16 +37,15 @@ def test_whois_google(client):
     assert raw.get("expires"), "google.com should have an expiration date"
 
     # summary should be present at the TargetResult level
-    summary = data["summary"]
+    summary = tr["summary"]
     assert summary["total"] > 0
 
 
 def test_whois_raw_structure(client):
     """Verify raw has: domain, registrar, created, expires, dnssec, name_servers."""
-    resp = client.post("/v1/check/whois", json={"target": "google.com"})
-    assert resp.status_code == 200
+    tr = _whois_result(client, "google.com")
 
-    whois_result = resp.json()["results"]["whois"]
+    whois_result = tr["results"]["whois"]
     assert whois_result["error"] is None
 
     raw = whois_result["raw"]
@@ -63,10 +68,9 @@ def test_whois_raw_structure(client):
 
 def test_whois_expiry_finding(client):
     """google.com should not be expiring soon (no HIGH finding for expiry)."""
-    resp = client.post("/v1/check/whois", json={"target": "google.com"})
-    assert resp.status_code == 200
+    tr = _whois_result(client, "google.com")
 
-    whois_result = resp.json()["results"]["whois"]
+    whois_result = tr["results"]["whois"]
     assert whois_result["error"] is None
 
     # google.com is renewed well in advance — should NOT have HIGH severity expiry findings
@@ -91,7 +95,8 @@ def test_whois_expiry_finding(client):
     assert "Domain expires soon" not in titles
 
 
-def test_whois_rejected_for_ip(client):
-    """WHOIS is a DNS-only check — sending an IP target to /v1/check/whois should return 422."""
-    resp = client.post("/v1/check/whois", json={"target": "8.8.8.8"})
-    assert resp.status_code == 422
+def test_whois_excluded_for_ip(client):
+    """WHOIS is a DNS-only check — IP targets should not have whois in results."""
+    data = submit_scan(client, {"target": "93.184.216.34"})
+    tr = data["results"][0]
+    assert "whois" not in tr["results"], f"IP scan should not include whois, got checks: {list(tr['results'].keys())}"

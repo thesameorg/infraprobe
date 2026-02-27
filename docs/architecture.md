@@ -6,19 +6,16 @@ Technical architecture for InfraProbe. Covers system design, component structure
 
 ## System Overview
 
-InfraProbe is an HTTP API that runs security checks against infrastructure targets. Endpoints under `/v1`:
+InfraProbe is an HTTP API that runs security checks against infrastructure targets. Single endpoint under `/v1`:
 
 - **`POST /v1/scan`** — bundle endpoint. Accepts a single `target`, runs a fixed set of checks based on target type (domains: headers/ssl/dns/web/whois; IPs: headers/ssl/web). Always returns **200** with inline results. Supports `?format=json|sarif|csv`.
-- **`POST /v1/check/{type}`** — single check per endpoint (e.g. `/v1/check/headers`, `/v1/check/ssl_deep`). Fast checks return 200 inline; slow checks (ssl_deep, cve) return 202 with a job ID.
-- **`GET /v1/scan/{job_id}`** — poll for async job status and results. Used for slow individual checks that return 202. Supports `?format=sarif|csv` on completed jobs.
 
-Background jobs (for async individual checks only) use a `JobStore` — `MemoryJobStore` for development, `FirestoreJobStore` for production (survives Cloud Run scale-to-zero). Backend selected via `INFRAPROBE_JOB_STORE_BACKEND`. No unversioned routes — all access goes through `/v1`.
+No unversioned routes — all access goes through `/v1`.
 
 ```
 Client
   │
-  │  POST /v1/scan {target}     — or —
-  │  POST /v1/check/headers {target}
+  │  POST /v1/scan {target}
   ▼
 ┌──────────────────────────────────────────────────┐
 │  FastAPI (ASGI)                                  │
@@ -52,40 +49,27 @@ Client
 src/infraprobe/
 ├── __init__.py
 ├── app.py              # FastAPI instance, scanner registration, exception handlers, /health, /health/ready, /metrics
-├── config.py           # pydantic-settings (INFRAPROBE_ env prefix), scan_semaphore, nmap_semaphore
+├── config.py           # pydantic-settings (INFRAPROBE_ env prefix), scan_semaphore
 ├── models.py           # Pydantic models + enums (Severity, CheckType, ErrorResponse)
 ├── metrics.py          # Prometheus metrics (request count/duration, scanner duration, active scans)
 ├── blocklist.py        # SSRF protection: block private/reserved IPs (urllib.parse-based)
 ├── target.py           # parse_target(), build_context() — URL/host/IPv6 normalization + DNS resolution
 ├── http.py             # Shared HTTP client (scanner_client, fetch_with_fallback)
-├── webhook.py          # Webhook delivery (unused — kept for reference)
 ├── logging.py          # Structured JSON logging configuration
 ├── api/
-│   └── scan.py         # POST /v1/scan + /v1/check/{type} + GET /v1/scan/{job_id}, orchestrator, scanner registry
+│   └── scan.py         # POST /v1/scan, orchestrator, scanner registry
 ├── formatters/
 │   ├── sarif.py        # SARIF 2.1.0 output formatter
 │   └── csv.py          # CSV output formatter
-├── storage/
-│   ├── __init__.py     # create_job_store() factory
-│   ├── base.py         # JobStore protocol (abstract interface)
-│   ├── memory.py       # MemoryJobStore (default, in-process)
-│   └── firestore.py    # FirestoreJobStore (persistent, for Cloud Run)
 └── scanners/
     ├── headers_drheader.py  # HTTP security headers check (drheaderplus)
     ├── ssl.py          # SSL/TLS certificate and cipher check
     ├── dns.py          # DNS security records check
-    ├── tech.py         # Technology detection (Wappalyzer)
-    ├── blacklist.py    # DNSBL blacklist check (light: 2 zones, deep: 15 zones)
     ├── web.py          # Web security (CORS, exposed paths, mixed content, robots.txt, security.txt)
-    ├── whois_scanner.py # WHOIS domain registration and expiry
-    ├── ports.py        # Port scanning (light: top 20, deep: top 1000 + version detection)
-    ├── cve.py          # CVE vulnerability scanning (nmap + NVD API)
-    └── deep/
-        ├── ssl.py      # Deep SSL/TLS scan (SSLyze)
-        └── dns.py      # Deep DNS scan (checkdmarc)
+    └── whois_scanner.py # WHOIS domain registration and expiry
 
 scripts/
-└── verify_deploy.py    # Deployment verification — hits every endpoint, reports pass/fail
+└── verify_deploy.py    # Deployment verification — hits scan endpoint, reports pass/fail
 ```
 
 Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for dev: `main.py` (runs uvicorn with reload).
@@ -96,19 +80,16 @@ Build: `hatchling` backend, installable as `infraprobe` wheel. Entry point for d
 
 ### App (`app.py`)
 
-Creates the FastAPI instance. Registers scanners into the module-level registry in `api/scan.py` via `register_scanner(CheckType, scan_fn)`. Mounts the scan router under `/v1`. Exposes `GET /health` (liveness), `GET /health/ready` (readiness — checks cleanup task is alive), and `GET /metrics` (Prometheus). Infrastructure paths (`/health`, `/health/ready`, `/metrics`) are excluded from logging and auth middleware.
+Creates the FastAPI instance. Registers scanners into the module-level registry in `api/scan.py` via `register_scanner(CheckType, scan_fn)`. Mounts the scan router under `/v1`. Exposes `GET /health` (liveness), `GET /health/ready` (readiness), and `GET /metrics` (Prometheus). Infrastructure paths (`/health`, `/health/ready`, `/metrics`) are excluded from logging and auth middleware.
 
-Global exception handlers return consistent `{"error": "<code>", "detail": "<message>"}` shapes: `BlockedTargetError` → 400 `blocked_target`, `CapacityExceededError` → 429 `too_many_requests`, `InvalidTargetError` → 422 `invalid_target`, unhandled `Exception` → 500 `internal_error`.
+Global exception handlers return consistent `{"error": "<code>", "detail": "<message>"}` shapes: `BlockedTargetError` → 400 `blocked_target`, `InvalidTargetError` → 422 `invalid_target`, unhandled `Exception` → 500 `internal_error`.
 
 Optional RapidAPI proxy-secret middleware is enabled when `INFRAPROBE_RAPIDAPI_PROXY_SECRET` is set, unless `INFRAPROBE_DEV_BYPASS_AUTH=true` which disables authentication entirely (for local development).
 
-Lifespan manages graceful shutdown: `drain_background_tasks(timeout=25)` waits for in-flight async scan jobs before stopping the cleanup loop.
-
 ### Orchestrator (`api/scan.py`)
 
-Owns the full lifecycle of a scan request. Serves three endpoint styles:
+Owns the full lifecycle of a scan request:
 
-**Bundle (`POST /scan` — always 200 sync):**
 1. Validate and parse `SingleCheckRequest` (Pydantic) — just `target` + optional `auth`
 2. Resolve checks from target type: `DOMAIN_CHECKS` (headers, ssl, dns, web, whois) or `IP_CHECKS` (headers, ssl, web)
 3. Validate target through `blocklist.validate_target()` — rejects private IPs (SSRF protection) and unresolvable domains
@@ -116,20 +97,7 @@ Owns the full lifecycle of a scan request. Serves three endpoint styles:
 5. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + SCHEDULING_BUFFER)` — the single timeout enforcement point
 6. Return `ScanResponse` inline (200)
 
-**Individual fast checks (`POST /check/{type}` — 200 inline):**
-1. Validate and parse `SingleCheckRequest` (single target)
-2. Same target validation and scanner dispatch as bundle, but runs one check type
-3. Returns `TargetResult` directly (not wrapped in `ScanResponse`)
-
-**Individual slow checks (`POST /check/{type}` for ssl_deep, cve — 202 async):**
-1. Same validation as fast checks
-2. Creates a job and background task, returns 202 with job ID
-
-**Poll (`GET /scan/{job_id}`):**
-1. Returns full `Job` with status, request, and result (when completed)
-2. Supports `?format=sarif|csv` on completed jobs
-
-Routes are generated at import time by looping over `CheckType` enum — each value gets a `/check/{name}` route. Active checks (headers, ssl, dns, web, whois) get the "Checks" OpenAPI tag; deprecated scanners (tech, blacklist, etc.) get "Deprecated". The orchestrator is scanner-agnostic: it dispatches by `CheckType` to whatever function was registered. Adding a scanner requires no changes here.
+The orchestrator is scanner-agnostic: it dispatches by `CheckType` to whatever function was registered. Adding a scanner requires no changes here.
 
 ### Scanner Registry
 
@@ -139,7 +107,7 @@ Scanner function signature: `async def scan(target: str, timeout: float) -> Chec
 
 ### Shared HTTP Client (`http.py`)
 
-Provides `scanner_client(timeout)` and `fetch_with_fallback(target, client)` used by all HTTP-based scanners (`headers_drheader`, `tech`, `web`). Centralises the HTTPS-first with HTTP-fallback pattern, TLS verification disabled (scanners inspect certs separately), and short connect timeouts (3 s cap). `scanner_client` accepts `follow_redirects` (default `True`); the headers scanner uses `follow_redirects=False` to analyze the target's own response headers rather than a redirect destination's.
+Provides `scanner_client(timeout)` and `fetch_with_fallback(target, client)` used by all HTTP-based scanners (`headers_drheader`, `web`). Centralises the HTTPS-first with HTTP-fallback pattern, TLS verification disabled (scanners inspect certs separately), and short connect timeouts (3 s cap). `scanner_client` accepts `follow_redirects` (default `True`); the headers scanner uses `follow_redirects=False` to analyze the target's own response headers rather than a redirect destination's.
 
 ### Blocklist (`blocklist.py`)
 
@@ -160,25 +128,17 @@ SSRF protection layer. Called before any scanner runs.
 | `log_level` | `"info"` | `INFRAPROBE_LOG_LEVEL` | valid Python log level |
 | `port` | `8080` | `INFRAPROBE_PORT` | `ge=1, le=65535` |
 | `scanner_timeout` | `10.0` | `INFRAPROBE_SCANNER_TIMEOUT` | `gt=0` |
-| `deep_scanner_timeout` | `30.0` | `INFRAPROBE_DEEP_SCANNER_TIMEOUT` | `gt=0` |
 | `dev_bypass_auth` | `false` | `INFRAPROBE_DEV_BYPASS_AUTH` | — |
 | `max_concurrent_scans` | `5` | `INFRAPROBE_MAX_CONCURRENT_SCANS` | `ge=1, le=50` |
-| `nmap_max_concurrent` | `6` | `INFRAPROBE_NMAP_MAX_CONCURRENT` | `ge=1, le=20` |
-| `job_ttl_seconds` | `3600` | `INFRAPROBE_JOB_TTL_SECONDS` | `gt=0` |
-| `job_cleanup_interval` | `300` | `INFRAPROBE_JOB_CLEANUP_INTERVAL` | `gt=0` |
-| `job_store_backend` | `"memory"` | `INFRAPROBE_JOB_STORE_BACKEND` | `memory` or `firestore` |
-| `firestore_project` | `None` | `INFRAPROBE_FIRESTORE_PROJECT` | — |
-| `firestore_database` | `None` | `INFRAPROBE_FIRESTORE_DATABASE` | — |
 
 ---
 
 ## Data Model
 
 ```
-ScanRequest (internal — for async job storage)       SingleCheckRequest (API input)
-├── target: TargetStr                                └── target: TargetStr (max 2048 chars)
-├── checks: list[CheckType] | None                      auth: AuthConfig | None (excluded from dumps)
-└── auth: AuthConfig | None (excluded from dumps)
+SingleCheckRequest (API input)
+└── target: TargetStr (max 2048 chars)
+    auth: AuthConfig | None (excluded from dumps)
 
 ScanResponse                   TargetResult
 ├── results: list[TargetResult] ├── target: str
@@ -190,18 +150,16 @@ CheckResult                    └── summary: SeveritySummary
 ├── raw: dict[str, Any]         ├── critical/high/medium/low/info: int
 └── error: str | None           └── total: int
 
-Finding                        Job (for async individual checks)
-├── severity: Severity          ├── job_id: str
-├── title: str                  ├── status: JobStatus (pending/running/completed/failed)
-├── description: str            ├── created_at/updated_at: datetime
-└── details: dict[str, Any]     ├── request: ScanRequest
-                                ├── result: ScanResponse | None
-                                └── error: str | None
+Finding
+├── severity: Severity
+├── title: str
+├── description: str
+└── details: dict[str, Any]
 ```
 
-Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, blacklist, blacklist_deep, web, whois, ports, cve).
+Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, headers, dns, web, whois).
 
-`POST /v1/scan` uses `SingleCheckRequest` → `ScanResponse` (always 200). `POST /v1/check/{type}` uses `SingleCheckRequest` → `TargetResult` (200 fast) or `JobCreate` (202 slow). Poll via `GET /v1/scan/{job_id}` → `Job` with `ScanResponse` result.
+`POST /v1/scan` uses `SingleCheckRequest` → `ScanResponse` (always 200).
 
 `CheckResult.error` is the discriminator: if null, `findings` and `raw` are valid. If set, the scanner failed and `findings` is empty.
 
@@ -224,11 +182,9 @@ _scan_target(example.com, [headers, ssl, dns, web, whois]):
     )
 ```
 
-Max concurrency for bundle: 5 checks (domains) or 3 checks (IPs). Individual check endpoints run 1 task. All I/O-bound (HTTP, DNS, TLS handshakes).
+Max concurrency for bundle: 5 checks (domains) or 3 checks (IPs). All I/O-bound (HTTP, DNS, TLS handshakes).
 
-**Scan semaphore:** A global `asyncio.Semaphore` (from `config.scan_semaphore()`, default 5) limits concurrent `_scan_target()` calls to prevent event loop starvation under load. Multi-target scans acquire/release slots per target independently.
-
-**Nmap semaphore:** Port and CVE scanners spawn nmap subprocesses via `asyncio.to_thread`. A shared `asyncio.Semaphore` (from `config.nmap_semaphore()`, default 6) limits concurrent nmap processes to prevent OOM under load. All nmap-based checks are async (202), so they queue and wait for slots.
+**Scan semaphore:** A global `asyncio.Semaphore` (from `config.scan_semaphore()`, default 5) limits concurrent `_scan_target()` calls to prevent event loop starvation under load.
 
 Total latency per request ≈ `max(scanner_timeout)` + scheduling overhead, not the sum.
 
@@ -238,7 +194,7 @@ Total latency per request ≈ `max(scanner_timeout)` + scheduling overhead, not 
 
 Single enforcement point: `_run_scanner()` wraps each scanner call in `asyncio.wait_for(fn(target, budget), timeout=budget + SCHEDULING_BUFFER)`.
 
-- `budget` = `settings.scanner_timeout` (default 10s) for light checks, `settings.deep_scanner_timeout` (default 30s) for deep checks
+- `budget` = `settings.scanner_timeout` (default 10s)
 - `SCHEDULING_BUFFER` = 0.5s (covers asyncio task-switch latency only — scanners must respect their own timeout budget internally)
 - Scanners pass `budget` to their I/O libraries as a soft hint
 - If a scanner exceeds budget + buffer, `wait_for` cancels it and the orchestrator returns `CheckResult(error="timed out")`
@@ -256,9 +212,6 @@ All error responses use a consistent shape: `{"error": "<code>", "detail": "<mes
 | Blocked target | Whole request | 400 | `blocked_target` | Global exception handler |
 | Invalid target | Whole request | 422 | `invalid_target` | Global exception handler |
 | Auth rejected | Whole request | 403 | `forbidden` | RapidAPI middleware |
-| Capacity exceeded | Whole request | 429 | `too_many_requests` | Global exception handler |
-| Job not found | Single job | 404 | `not_found` | Inline JSONResponse |
-| Shutting down | Async check | 503 | `shutting_down` | Graceful shutdown flag |
 | Unhandled error | Whole request | 500 | `internal_error` | Catch-all handler |
 | Scanner not registered | Single check | 200 | — | `CheckResult(error=...)` |
 | Scanner timeout | Single check | 200 | — | `wait_for` cancels, `CheckResult(error=...)` |
@@ -281,16 +234,15 @@ Only input validation fails the entire request. Scanner failures are isolated �
 ```
 Push to main
   └─ CI (GitHub Actions)
-       ├── uv sync --extra firestore
+       ├── uv sync
        ├── pip-audit (dependency vulnerability scanning)
-       ├── Start Firestore emulator (gcloud)
-       └── pytest (with FIRESTORE_EMULATOR_HOST)
+       └── pytest
             └─ on success ─→ Deploy
-                              ├── docker build + push to Artifact Registry (with --extra firestore)
-                              └── gcloud run deploy (SHA-tagged image, JOB_STORE_BACKEND=firestore)
+                              ├── docker build + push to Artifact Registry
+                              └── gcloud run deploy (SHA-tagged image)
 ```
 
-Deploy workflow triggers on CI success (not in parallel). Uses immutable SHA-tagged images for Cloud Run deployments. Artifact Registry in the same GCP region as Cloud Run. Production uses real Firestore (Native mode) via Application Default Credentials on the Cloud Run service account.
+Deploy workflow triggers on CI success (not in parallel). Uses immutable SHA-tagged images for Cloud Run deployments. Artifact Registry in the same GCP region as Cloud Run.
 
 ### Docker
 
@@ -302,19 +254,19 @@ FROM ghcr.io/astral-sh/uv:0.6-python3.12-bookworm-slim
 CMD ["uv", "run", "uvicorn", "infraprobe.app:app", "--host", "0.0.0.0", "--port", "8080"]
 ```
 
-Production: no `--reload`, no dev dependencies (`--no-dev`), frozen lockfile (`--frozen`), Firestore extra installed (`--extra firestore`).
+Production: no `--reload`, no dev dependencies (`--no-dev`), frozen lockfile (`--frozen`).
 
-Local dev: `docker-compose.yaml` maps host port 8000 to container port 8080. Optional `firestore` profile starts a Firestore emulator sidecar for local testing (`docker compose --profile firestore up`).
+Local dev: `docker-compose.yaml` maps host port 8000 to container port 8080.
 
 ---
 
 ## Current State
 
-**Deployed:** Live on Google Cloud Run with Firestore job storage. URL stored in `.envs/deployed.url`, RapidAPI proxy secret in `.envs/rapidapi_proxy_secret.txt`. CI/CD pipeline pushes on every `main` merge. Cloud Run service account has `roles/datastore.user` for Firestore access; Firestore TTL policy on `expire_at` auto-deletes expired jobs.
+**Deployed:** Live on Google Cloud Run. URL stored in `.envs/deployed.url`, RapidAPI proxy secret in `.envs/rapidapi_proxy_secret.txt`. CI/CD pipeline pushes on every `main` merge.
 
-**Deployment verification:** `scripts/verify_deploy.py` tests all endpoints against a live instance — health, every scanner (fast inline + slow async), bundle scan (submit → poll), target auto-detection, output formats (JSON, SARIF, CSV), error handling (SSRF block, validation), and auth enforcement. Reads URL and secret from `.envs/` by default; also supports `uv run python scripts/verify_deploy.py http://localhost:8080` for local dev.
+**Deployment verification:** `scripts/verify_deploy.py` tests scan endpoint against a live instance — health, bundle scan (domain + IP), target auto-detection, output formats (JSON, SARIF, CSV), error handling (SSRF block, validation), and auth enforcement.
 
-**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `blacklist`, `blacklist_deep`, `web`, `whois`, `ports`, `cve` — all registered and accessible via individual `/v1/check/{type}` endpoints. Bundle scan (`POST /v1/scan`) runs a fixed set: headers, ssl, dns, web, whois (domains) / headers, ssl, web (IPs). Active checks are tagged "Checks" in OpenAPI; deprecated scanners are tagged "Deprecated".
+**Implemented scanners:** `headers`, `ssl`, `dns`, `web`, `whois` — all registered and run as part of the bundle scan (`POST /v1/scan`).
 
 **Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
 
@@ -327,12 +279,9 @@ Local dev: `docker-compose.yaml` maps host port 8000 to container port 8080. Opt
 Production robustness measures implemented:
 
 - **Config validation:** All numeric settings have Pydantic `Field` constraints; invalid values (e.g. `scanner_timeout=0`) are rejected at startup. `log_level` validated against Python's logging levels.
-- **Input limits:** `TargetStr` type enforces `max_length=2048` on all target strings and webhook URLs to prevent DoS via oversized payloads.
+- **Input limits:** `TargetStr` type enforces `max_length=2048` on all target strings to prevent DoS via oversized payloads.
 - **Consistent error shapes:** All error responses use `{"error": "<code>", "detail": "<message>"}`. Catch-all `Exception` handler returns 500 `internal_error`.
-- **Job store hardening:** `MemoryJobStore` uses `asyncio.Lock` to protect all `_jobs` dict access. Cleanup loop wrapped in `try/except` with `logger.exception()`. TTL expiration based on `updated_at` (not `created_at`) so active jobs aren't prematurely evicted. `FirestoreJobStore` available for persistent storage (uses Firestore TTL policy on `expire_at` field — no cleanup loop needed). Backend selected via `INFRAPROBE_JOB_STORE_BACKEND` (`memory`|`firestore`).
 - **Scan concurrency:** `asyncio.Semaphore` (configurable, default 5) limits concurrent `_scan_target()` calls to prevent event loop starvation under load.
-- **Nmap concurrency:** `asyncio.Semaphore` (configurable, default 6) limits concurrent nmap processes in port and CVE scanners to prevent OOM. All nmap checks are async, so they queue and wait for slots.
-- **Readiness probe:** `GET /health/ready` checks cleanup task is alive, returns 503 if not. Separate from liveness (`GET /health`).
-- **Graceful shutdown:** Lifespan shutdown drains in-flight background tasks (25s timeout) before stopping cleanup loop. New async scan requests during shutdown return 503.
+- **Readiness probe:** `GET /health/ready` returns 200. Separate from liveness (`GET /health`).
 - **Prometheus metrics:** `GET /metrics` exposes request count/duration, scanner duration, and active scan gauges. Compatible with Cloud Run metrics scraping and any Prometheus-compatible collector.
 - **Dependency scanning:** `pip-audit` runs in CI before tests to catch known vulnerabilities in dependencies.

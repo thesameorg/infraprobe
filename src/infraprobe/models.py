@@ -1,4 +1,3 @@
-from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -23,16 +22,9 @@ class Severity(StrEnum):
 
 class CheckType(StrEnum):
     SSL = "ssl"
-    SSL_DEEP = "ssl_deep"
     HEADERS = "headers"
     DNS = "dns"
-    DNS_DEEP = "dns_deep"
-    TECH = "tech"
-    BLACKLIST = "blacklist"
-    BLACKLIST_DEEP = "blacklist_deep"
     WEB = "web"
-    PORTS = "ports"
-    CVE = "cve"
     WHOIS = "whois"
 
 
@@ -53,7 +45,7 @@ IP_CHECKS: list[CheckType] = [
 ]
 
 # Checks that require a domain name (not applicable to IP targets)
-DNS_ONLY_CHECKS: frozenset[CheckType] = frozenset({CheckType.DNS, CheckType.DNS_DEEP, CheckType.WHOIS})
+DNS_ONLY_CHECKS: frozenset[CheckType] = frozenset({CheckType.DNS, CheckType.WHOIS})
 
 
 class Finding(BaseModel):
@@ -127,33 +119,6 @@ class SingleCheckRequest(BaseModel):
     )
 
 
-class ScanRequest(BaseModel):
-    """Used internally for async job storage (individual /check/ jobs)."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {"target": "example.com", "checks": ["headers"]},
-            ]
-        }
-    )
-
-    target: TargetStr = Field(
-        description=(
-            "Domain name, IP address, or host:port to scan (e.g. 'example.com', '93.184.216.34', 'example.com:8443')."
-        ),
-    )
-    checks: list[CheckType] | None = Field(
-        default=None,
-        description="Check types to run.",
-    )
-    auth: AuthConfig | None = Field(
-        default=None,
-        exclude=True,
-        description="Credentials to send to the scan target (header, basic, bearer, or cookie auth).",
-    )
-
-
 _SCORE_PENALTY: dict[str, int] = {
     Severity.CRITICAL: 20,
     Severity.HIGH: 10,
@@ -218,34 +183,6 @@ class ScanResponse(BaseModel):
         return self
 
 
-# ---------------------------------------------------------------------------
-# Async job models
-# ---------------------------------------------------------------------------
-
-
 class ErrorResponse(BaseModel):
     error: str
     detail: str
-
-
-class JobStatus(StrEnum):
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class JobCreate(BaseModel):
-    job_id: str
-    status: JobStatus
-    created_at: datetime
-
-
-class Job(BaseModel):
-    job_id: str
-    status: JobStatus
-    created_at: datetime
-    updated_at: datetime
-    request: ScanRequest
-    result: ScanResponse | None = None
-    error: str | None = None

@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 import yaml
-
 from infraprobe.scanners.headers import scan
 
 
@@ -20,7 +19,10 @@ def check_result(result, expected):
             checks.append((result.error is None, f"error is None (got: {result.error!r})"))
         else:
             checks.append(
-                (result.error is not None and expected["error"] in result.error, f"error contains '{expected['error']}'")
+                (
+                    result.error is not None and expected["error"] in result.error,
+                    f"error contains '{expected['error']}'",
+                )
             )
 
     # Min findings count

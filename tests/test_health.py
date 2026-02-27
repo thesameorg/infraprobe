@@ -5,7 +5,7 @@ def test_health(client):
 
 
 def test_health_ready(client):
-    """Readiness probe should return 200 when cleanup task is running."""
+    """Readiness probe should return 200."""
     response = client.get("/health/ready")
     assert response.status_code == 200
     assert response.json()["status"] == "ready"
@@ -23,5 +23,5 @@ def test_metrics_endpoint(client):
 def test_target_too_long(client):
     """Target string exceeding max_length should return 422."""
     long_target = "a" * 2049
-    resp = client.post("/v1/check/headers", json={"target": long_target})
+    resp = client.post("/v1/scan", json={"target": long_target})
     assert resp.status_code == 422

@@ -104,42 +104,6 @@ def test_json_formatter_exception():
     assert "ValueError: boom" in entry["exception"]
 
 
-def test_scanner_logs_on_check(client, caplog):
-    """Scanner should produce started/finished logs with expected fields."""
-    with caplog.at_level(logging.INFO, logger="infraprobe.scanner"):
-        client.post("/v1/check/headers", json={"target": "example.com"})
-
-    started = [r for r in caplog.records if "started on" in r.message]
-    assert len(started) == 1
-    assert started[0].check == "headers"
-    assert started[0].scanner_timeout > 0
-
-    finished = [r for r in caplog.records if "finished on" in r.message]
-    assert len(finished) == 1
-
-    record = finished[0]
-    assert record.check == "headers"
-    assert record.target == "example.com"
-    assert isinstance(record.duration_ms, int)
-    assert record.duration_ms >= 0
-    assert isinstance(record.findings_count, int)
-    assert hasattr(record, "scanner_timeout")
-
-
-def test_request_completed_log(client, caplog):
-    """Middleware should log 'request completed' with status_code and duration_ms."""
-    with caplog.at_level(logging.INFO, logger="infraprobe.app"):
-        client.post("/v1/check/headers", json={"target": "example.com"})
-
-    completed = [r for r in caplog.records if r.message == "request completed"]
-    assert len(completed) == 1
-
-    record = completed[0]
-    assert record.status_code == 200
-    assert isinstance(record.duration_ms, int)
-    assert record.endpoint == "/v1/check/headers"
-
-
 def test_health_not_logged(client, caplog):
     """Health endpoint should not produce log lines."""
     with caplog.at_level(logging.DEBUG):
@@ -147,16 +111,6 @@ def test_health_not_logged(client, caplog):
 
     messages = [r.message for r in caplog.records]
     assert "request completed" not in messages
-
-
-def test_blocked_target_logged(client, caplog):
-    """Blocked target should produce a warning log."""
-    with caplog.at_level(logging.WARNING, logger="infraprobe.app"):
-        client.post("/v1/check/headers", json={"target": "127.0.0.1"})
-
-    warnings = [r for r in caplog.records if "blocked" in r.message]
-    assert len(warnings) >= 1
-    assert warnings[0].levelno == logging.WARNING
 
 
 def test_scan_bundle_logs(client, caplog):
@@ -174,18 +128,6 @@ def test_scan_bundle_logs(client, caplog):
     scan_started = next(r for r in caplog.records if "scan started:" in r.message)
     assert scan_started.targets == ["example.com"]
     assert set(scan_started.checks) == {"headers", "ssl", "dns", "web", "whois"}
-
-
-def test_request_id_in_context(client, caplog):
-    """request_id set by middleware should propagate to scanner logs via ContextVar."""
-    with caplog.at_level(logging.INFO):
-        client.post("/v1/check/headers", json={"target": "example.com"})
-
-    # Verify JSON formatter would include request_id by checking the ContextVar was set
-    # (caplog records don't go through the formatter, but we can verify the formatter
-    # produces correct output by formatting one of the captured records)
-    scanner_records = [r for r in caplog.records if r.name == "infraprobe.scanner"]
-    assert len(scanner_records) > 0
 
 
 def test_log_level_respects_config():

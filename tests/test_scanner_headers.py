@@ -6,7 +6,15 @@ and verify that the scanner delivers actionable security findings.
 
 import pytest
 
+from tests.helpers import submit_scan
+
 pytestmark = pytest.mark.integration
+
+
+def _headers_result(client, target: str) -> dict:
+    """Run a bundle scan and return the TargetResult dict."""
+    data = submit_scan(client, {"target": target})
+    return data["results"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -17,11 +25,9 @@ pytestmark = pytest.mark.integration
 def test_missing_security_headers_vulnweb(client):
     """testphp.vulnweb.com should be missing critical security headers:
     HSTS, CSP, and X-Content-Type-Options at minimum."""
-    resp = client.post("/v1/check/headers", json={"target": "testphp.vulnweb.com"})
-    assert resp.status_code == 200
+    tr = _headers_result(client, "testphp.vulnweb.com")
 
-    data = resp.json()
-    headers_result = data["results"]["headers"]
+    headers_result = tr["results"]["headers"]
     assert headers_result["error"] is None
     assert len(headers_result["findings"]) > 0
 
@@ -58,10 +64,9 @@ def test_missing_security_headers_vulnweb(client):
 def test_server_header_leak(client):
     """testphp.vulnweb.com leaks its Server header (nginx) --
     the scanner should flag this as an information disclosure."""
-    resp = client.post("/v1/check/headers", json={"target": "testphp.vulnweb.com"})
-    assert resp.status_code == 200
+    tr = _headers_result(client, "testphp.vulnweb.com")
 
-    headers_result = resp.json()["results"]["headers"]
+    headers_result = tr["results"]["headers"]
     assert headers_result["error"] is None
 
     # The Server header leak should be in the findings
@@ -86,10 +91,9 @@ def test_server_header_leak(client):
 def test_well_configured_site(client):
     """google.com is well-configured -- should still have findings
     (e.g. missing CSP) but should NOT have critical severity findings."""
-    resp = client.post("/v1/check/headers", json={"target": "google.com"})
-    assert resp.status_code == 200
+    tr = _headers_result(client, "google.com")
 
-    headers_result = resp.json()["results"]["headers"]
+    headers_result = tr["results"]["headers"]
     assert headers_result["error"] is None
 
     # Even well-configured sites get some findings (info-level at minimum)
@@ -117,10 +121,9 @@ def test_well_configured_site(client):
 
 def test_raw_data_structure(client):
     """Verify raw dict contains the expected fields: url, status_code, headers (dict)."""
-    resp = client.post("/v1/check/headers", json={"target": "testphp.vulnweb.com"})
-    assert resp.status_code == 200
+    tr = _headers_result(client, "testphp.vulnweb.com")
 
-    raw = resp.json()["results"]["headers"]["raw"]
+    raw = tr["results"]["headers"]["raw"]
 
     # Required fields
     assert "url" in raw, "raw must contain 'url'"
@@ -151,10 +154,9 @@ def test_https_detection(client):
     """Scanning a target that falls back to HTTP should produce an
     'HTTP (not HTTPS)' high-severity finding."""
     # testphp.vulnweb.com does not serve HTTPS, falls back to HTTP
-    resp = client.post("/v1/check/headers", json={"target": "testphp.vulnweb.com"})
-    assert resp.status_code == 200
+    tr = _headers_result(client, "testphp.vulnweb.com")
 
-    headers_result = resp.json()["results"]["headers"]
+    headers_result = tr["results"]["headers"]
     assert headers_result["error"] is None
 
     raw = headers_result["raw"]
@@ -192,13 +194,9 @@ def test_https_detection(client):
 def test_redirect_detection(client):
     """When the target responds with a redirect (3xx), raw should contain
     redirect_location and a redirect finding should be emitted."""
-    # http://www.google.com redirects to http://www.google.com/ (or https variant)
-    # We use a target known to issue redirects.
-    # google.com typically redirects with 301 from HTTP to HTTPS.
-    resp = client.post("/v1/check/headers", json={"target": "google.com"})
-    assert resp.status_code == 200
+    tr = _headers_result(client, "google.com")
 
-    headers_result = resp.json()["results"]["headers"]
+    headers_result = tr["results"]["headers"]
     assert headers_result["error"] is None
 
     raw = headers_result["raw"]
@@ -233,16 +231,12 @@ def test_redirect_detection(client):
 
 
 def test_summary_field(client):
-    """Response-level summary should have severity counts matching the
-    actual findings from the headers check."""
-    resp = client.post("/v1/check/headers", json={"target": "testphp.vulnweb.com"})
-    assert resp.status_code == 200
-
-    data = resp.json()
+    """Response-level summary should have severity counts."""
+    tr = _headers_result(client, "testphp.vulnweb.com")
 
     # Summary should exist at the target-result level
-    assert "summary" in data, "Response must include a 'summary' field"
-    summary = data["summary"]
+    assert "summary" in tr, "TargetResult must include a 'summary' field"
+    summary = tr["summary"]
 
     # Summary should have all severity count fields
     for severity in ("critical", "high", "medium", "low", "info", "total"):
@@ -255,21 +249,10 @@ def test_summary_field(client):
         summary["critical"] + summary["high"] + summary["medium"] + summary["low"] + summary["info"]
     ), "summary.total must equal sum of all severity counts"
 
-    # Verify counts match the actual findings
-    findings = data["results"]["headers"]["findings"]
-    assert summary["total"] == len(findings), (
-        f"summary.total ({summary['total']}) must match findings count ({len(findings)})"
-    )
-
-    # Count findings per severity and compare to summary
-    from collections import Counter
-
-    severity_counts = Counter(f["severity"] for f in findings)
-    for severity in ("critical", "high", "medium", "low", "info"):
-        expected = severity_counts.get(severity, 0)
-        assert summary[severity] == expected, (
-            f"summary.{severity} ({summary[severity]}) does not match actual count ({expected})"
-        )
+    # Headers findings should contribute to the total
+    headers_result = tr["results"]["headers"]
+    assert len(headers_result["findings"]) > 0, "Headers scanner should produce findings"
+    assert summary["total"] >= len(headers_result["findings"]), "Summary total should include headers findings"
 
 
 # ---------------------------------------------------------------------------
@@ -281,9 +264,9 @@ def test_auth_header_forwarding(client):
     """The headers scanner should accept an auth config with a bearer token.
     The request should succeed (200) and produce findings -- auth does not
     prevent analysis."""
-    resp = client.post(
-        "/v1/check/headers",
-        json={
+    data = submit_scan(
+        client,
+        {
             "target": "testphp.vulnweb.com",
             "auth": {
                 "type": "bearer",
@@ -291,10 +274,8 @@ def test_auth_header_forwarding(client):
             },
         },
     )
-    assert resp.status_code == 200
-
-    data = resp.json()
-    headers_result = data["results"]["headers"]
+    tr = data["results"][0]
+    headers_result = tr["results"]["headers"]
     assert headers_result["error"] is None, (
         f"Auth config should not cause scanner errors, got: {headers_result['error']}"
     )

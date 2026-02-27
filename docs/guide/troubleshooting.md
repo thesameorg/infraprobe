@@ -15,10 +15,8 @@ All error responses are JSON with this structure:
 |-------------|-----------|-------|
 | 400 | `blocked_target` | Target is a private/reserved IP address (SSRF protection) |
 | 403 | `forbidden` | Missing or invalid `x-rapidapi-proxy-secret` header |
-| 404 | `not_found` | Job ID does not exist |
-| 422 | `invalid_target` | Target format is invalid, or a DNS-only check was requested for an IP |
+| 422 | `invalid_target` | Target format is invalid, or domain cannot be resolved |
 | 500 | `internal_error` | Unexpected server error |
-| 503 | `shutting_down` | Server is shutting down; retry after a moment |
 
 ## Scanner Errors
 
@@ -37,10 +35,9 @@ Common scanner error causes:
 
 | Error message | Cause | What to do |
 |--------------|-------|------------|
-| `Scanner X timed out` | Scanner exceeded its time budget | Target may be slow to respond; try again or use deep scan for longer timeout |
+| `Scanner X timed out` | Scanner exceeded its time budget | Target may be slow to respond; try again |
 | `Connection refused` | Target is not accepting connections on the expected port | Verify the target is reachable and the service is running |
 | `Name resolution failed` | Domain could not be resolved via DNS | Check that the domain exists and DNS is configured |
-| `No open ports found` | Port scanner found no accessible ports | Target may be behind a firewall dropping all packets |
 
 ## Common Issues
 
@@ -48,51 +45,25 @@ Common scanner error causes:
 
 InfraProbe blocks scanning of private and reserved IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x, 127.x.x.x, etc.) to prevent SSRF attacks. This also applies to domains that resolve to private IPs. This is by design and cannot be bypassed.
 
-### DNS-only checks fail for IP targets
+### DNS and WHOIS not in IP scan results
 
-The `dns`, `dns_deep`, and `whois` checks require a domain name. Using them with IP targets via `/v1/check/{type}` returns a 422 error. The bundle scan (`POST /v1/scan`) auto-detects target type — IP targets get headers, ssl, web; domains get headers, ssl, dns, web, whois.
+The `dns` and `whois` checks require a domain name. The bundle scan (`POST /v1/scan`) auto-detects target type — IP targets get headers, ssl, web; domains get headers, ssl, dns, web, whois.
 
 ### Scan returns mostly "info" findings
 
-Info-level findings are positive signals (e.g., "Valid certificate", "TLS 1.3 supported"). If you only see info findings, your target's security posture is good for the checks that ran. Consider running additional individual checks like `ports` or `cve` via `/v1/check/{type}` for deeper coverage.
-
-### Deep scans are slow
-
-Deep scans use more thorough tools and have a 30-second timeout (vs 10 seconds for light scans). `cve` performs version detection plus NVD API lookups, and `ssl_deep` runs full SSLyze analysis. This is expected behavior.
+Info-level findings are positive signals (e.g., "Valid certificate", "TLS 1.3 supported"). If you only see info findings, your target's security posture is good for the checks that ran.
 
 ### CSV or SARIF output is empty
 
 Checks that produce no findings and no errors are omitted from CSV output. SARIF output includes all rules but may have zero results if no issues were found.
 
-### Firestore "Permission Denied" errors
-
-The service account used to connect to Firestore needs the `Cloud Datastore User` role (`roles/datastore.user`). For local development, set `GOOGLE_APPLICATION_CREDENTIALS` to a service account key file. In production (Cloud Run), the compute service account gets this role.
-
-```bash
-# Grant Firestore access to a service account
-gcloud projects add-iam-policy-binding PROJECT_ID \
-  --member="serviceAccount:SA_EMAIL" \
-  --role="roles/datastore.user"
-```
-
-### Jobs disappear after restart (memory backend)
-
-The default `memory` job store loses all jobs when the server restarts. Set `INFRAPROBE_JOB_STORE_BACKEND=firestore` for persistent storage that survives restarts and Cloud Run scale-to-zero.
-
 ## Performance Tips
 
 - **Bundle scan is fast** — `POST /v1/scan` runs all checks in parallel and returns 200 inline. P95 ~5s for domains, ~3s for IPs.
-- **Use individual checks** (`/v1/check/{type}`) when you only need one specific scanner
-- **Start with light scans** — deep variants provide more detail but take longer; use them when light results indicate areas of concern
 
 ## Timeouts
 
-| Scan type | Timeout |
-|-----------|---------|
-| Light checks (headers, ssl, dns, tech, blacklist, whois, web, ports) | 10 seconds |
-| Deep checks (ssl_deep, dns_deep, blacklist_deep, cve) | 30 seconds |
-
-These are per-scanner timeouts. A bundle scan runs all selected checks in parallel, so total wall-clock time is roughly the slowest individual check.
+All scanners use a 10-second per-scanner timeout. A bundle scan runs all selected checks in parallel, so total wall-clock time is roughly the slowest individual check.
 
 ---
 

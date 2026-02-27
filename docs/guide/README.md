@@ -4,23 +4,19 @@ InfraProbe is an infrastructure security scanning API. Send it a domain or IP ad
 
 ## Check Types
 
-| Check | Description | In bundle scan | Deep variant |
-|-------|-------------|----------------|--------------|
-| [headers](checks/headers.md) | HTTP security headers | Yes | No |
-| [ssl](checks/ssl.md) | SSL/TLS certificate & protocol | Yes | [ssl_deep](checks/ssl.md#deep-scan) |
-| [dns](checks/dns.md) | DNS records, SPF, DMARC, CAA | Yes (domains) | [dns_deep](checks/dns.md#deep-scan) |
-| [web](checks/web.md) | CORS, exposed paths, security.txt | Yes | No |
-| [whois](checks/whois.md) | Domain registration & expiry | Yes (domains) | No |
-| [tech](checks/tech.md) | Technology fingerprinting (Wappalyzer) | No | No |
-| [blacklist](checks/blacklist.md) | DNSBL spam/abuse lists | No | [blacklist_deep](checks/blacklist.md#deep-scan) |
-| [ports](checks/ports.md) | Open port detection (top 20) | No | No |
-| [cve](checks/cve.md) | CVE vulnerability detection | No | No |
+| Check | Description |
+|-------|-------------|
+| [headers](checks/headers.md) | HTTP security headers |
+| [ssl](checks/ssl.md) | SSL/TLS certificate & protocol |
+| [dns](checks/dns.md) | DNS records, SPF, DMARC, CAA |
+| [web](checks/web.md) | CORS, exposed paths, security.txt |
+| [whois](checks/whois.md) | Domain registration & expiry |
 
 **Bundle scan checks for domains:** headers, ssl, dns, web, whois
 
 **Bundle scan checks for IPs:** headers, ssl, web
 
-All other scanners are available via individual `/v1/check/{type}` endpoints. DNS and whois checks require a domain name and are not available for IP targets.
+DNS and whois checks require a domain name and are not included for IP targets.
 
 ## Severity Levels
 

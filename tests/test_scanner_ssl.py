@@ -1,9 +1,11 @@
-"""Comprehensive integration tests for the SSL scanner via POST /v1/check/ssl.
+"""Comprehensive integration tests for the SSL scanner via POST /v1/scan.
 
 All tests hit real external targets -- no mocks.
 """
 
 import pytest
+
+from tests.helpers import submit_scan
 
 pytestmark = pytest.mark.integration
 
@@ -30,11 +32,10 @@ EXPECTED_RAW_FIELDS = {
 }
 
 
-def _ssl_check(client, target: str) -> dict:
-    """POST /v1/check/ssl and return the parsed JSON body."""
-    resp = client.post("/v1/check/ssl", json={"target": target})
-    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
-    return resp.json()
+def _ssl_result(client, target: str) -> dict:
+    """Run a bundle scan and return the TargetResult dict."""
+    data = submit_scan(client, {"target": target})
+    return data["results"][0]
 
 
 # ---------------------------------------------------------------------------
@@ -44,10 +45,10 @@ def _ssl_check(client, target: str) -> dict:
 
 def test_valid_certificate(client):
     """Scan example.com -- should have no critical findings and complete raw data."""
-    data = _ssl_check(client, "example.com")
+    tr = _ssl_result(client, "example.com")
 
-    assert data["target"] == "example.com"
-    ssl_result = data["results"]["ssl"]
+    assert tr["target"] == "example.com"
+    ssl_result = tr["results"]["ssl"]
     assert ssl_result["error"] is None
 
     # No critical findings on a well-configured site
@@ -74,9 +75,9 @@ def test_valid_certificate(client):
 
 def test_tls_version_detected(client):
     """Scan google.com -- should negotiate TLS 1.2 or TLS 1.3."""
-    data = _ssl_check(client, "google.com")
+    tr = _ssl_result(client, "google.com")
 
-    ssl_result = data["results"]["ssl"]
+    ssl_result = tr["results"]["ssl"]
     assert ssl_result["error"] is None
 
     protocol = ssl_result["raw"]["protocol_version"]
@@ -90,9 +91,9 @@ def test_tls_version_detected(client):
 
 def test_strong_key_detected(client):
     """Scan example.com -- RSA key >= 2048 bits, or EC key of any size."""
-    data = _ssl_check(client, "example.com")
+    tr = _ssl_result(client, "example.com")
 
-    ssl_result = data["results"]["ssl"]
+    ssl_result = tr["results"]["ssl"]
     assert ssl_result["error"] is None
 
     raw = ssl_result["raw"]
@@ -119,9 +120,9 @@ def test_strong_key_detected(client):
 
 def test_valid_cert_positive_findings(client):
     """Verify INFO-level positive findings exist (valid cert, strong key, etc.)."""
-    data = _ssl_check(client, "example.com")
+    tr = _ssl_result(client, "example.com")
 
-    ssl_result = data["results"]["ssl"]
+    ssl_result = tr["results"]["ssl"]
     assert ssl_result["error"] is None
 
     info_findings = [f for f in ssl_result["findings"] if f["severity"] == "info"]
@@ -144,10 +145,10 @@ def test_valid_cert_positive_findings(client):
 
 
 def test_port_80_no_tls(client):
-    """Scan example.com:80 -- should return an error (no TLS on port 80)."""
-    data = _ssl_check(client, "example.com:80")
+    """Scan example.com:80 -- SSL result should have an error (no TLS on port 80)."""
+    tr = _ssl_result(client, "example.com:80")
 
-    ssl_result = data["results"]["ssl"]
+    ssl_result = tr["results"]["ssl"]
     assert ssl_result["error"] is not None, "Expected an error for port 80 (no TLS)"
     assert ssl_result["findings"] == [], "No findings expected when TLS connection fails"
     assert ssl_result["raw"] == {}, "No raw data expected when TLS connection fails"
@@ -160,9 +161,9 @@ def test_port_80_no_tls(client):
 
 def test_raw_data_completeness(client):
     """Verify all expected raw fields are present and have sensible types."""
-    data = _ssl_check(client, "example.com")
+    tr = _ssl_result(client, "example.com")
 
-    ssl_result = data["results"]["ssl"]
+    ssl_result = tr["results"]["ssl"]
     assert ssl_result["error"] is None
 
     raw = ssl_result["raw"]
@@ -194,12 +195,11 @@ def test_raw_data_completeness(client):
 
 
 def test_summary_field(client):
-    """Verify the response summary has correct severity counts."""
-    data = _ssl_check(client, "example.com")
+    """Verify the response summary has correct structure and counts."""
+    tr = _ssl_result(client, "example.com")
 
-    # summary lives at the TargetResult level
-    assert "summary" in data, f"Missing summary in response, keys: {list(data.keys())}"
-    summary = data["summary"]
+    assert "summary" in tr, f"Missing summary in TargetResult, keys: {list(tr.keys())}"
+    summary = tr["summary"]
 
     # Structure check
     for key in ("critical", "high", "medium", "low", "info", "total"):
@@ -213,11 +213,9 @@ def test_summary_field(client):
         f"Total mismatch: {summary['total']} != {computed_total} (individual counts)"
     )
 
-    # Total must match actual number of findings
-    ssl_result = data["results"]["ssl"]
-    assert summary["total"] == len(ssl_result["findings"]), (
-        f"summary.total ({summary['total']}) != findings count ({len(ssl_result['findings'])})"
-    )
+    # SSL findings should contribute to the total
+    ssl_result = tr["results"]["ssl"]
+    assert summary["total"] >= len(ssl_result["findings"]), "Summary total should include SSL findings"
 
     # For a valid site like example.com we expect INFO findings but no critical
     assert summary["critical"] == 0

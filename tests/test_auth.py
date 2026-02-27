@@ -12,7 +12,6 @@ from infraprobe.models import (
     BearerAuth,
     CookieAuth,
     HeaderAuth,
-    ScanRequest,
     SingleCheckRequest,
 )
 
@@ -125,14 +124,6 @@ class TestAuthConfigDiscriminator:
         req = SingleCheckRequest(target="example.com")
         assert req.auth is None
 
-    def test_auth_on_scan_request(self):
-        req = ScanRequest(target="example.com", auth={"type": "bearer", "token": "tok"})
-        assert isinstance(req.auth, BearerAuth)
-
-    def test_auth_on_scan_request_with_checks(self):
-        req = ScanRequest(target="example.com", checks=["headers"], auth={"type": "bearer", "token": "tok"})
-        assert isinstance(req.auth, BearerAuth)
-
 
 # ---------------------------------------------------------------------------
 # exclude=True — auth must not appear in serialized output
@@ -144,22 +135,6 @@ class TestAuthExclude:
         req = SingleCheckRequest(target="example.com", auth={"type": "bearer", "token": "secret"})
         dumped = req.model_dump()
         assert "auth" not in dumped
-
-    def test_scan_request_excludes_auth(self):
-        req = ScanRequest(target="example.com", auth={"type": "basic", "username": "u", "password": "p"})
-        dumped = req.model_dump()
-        assert "auth" not in dumped
-
-    def test_scan_request_with_checks_excludes_auth(self):
-        req = ScanRequest(target="example.com", checks=["headers"], auth={"type": "bearer", "token": "tok"})
-        dumped = req.model_dump()
-        assert "auth" not in dumped
-
-    def test_scan_request_json_excludes_auth(self):
-        req = ScanRequest(target="example.com", auth={"type": "bearer", "token": "secret"})
-        json_str = req.model_dump_json()
-        assert "secret" not in json_str
-        assert "auth" not in json_str
 
 
 # ---------------------------------------------------------------------------
@@ -264,17 +239,6 @@ class TestAuthAPI:
         # Auth should not appear in response
         assert "test-token" not in resp.text
 
-    def test_single_check_accepts_auth_field(self, client):
-        """POST /v1/check/dns with auth field works (DNS ignores auth)."""
-        resp = client.post(
-            "/v1/check/dns",
-            json={
-                "target": "example.com",
-                "auth": {"type": "basic", "username": "user", "password": "pass"},
-            },
-        )
-        assert resp.status_code == 200
-
     def test_scan_without_auth_still_works(self, client):
         """Existing behavior — no auth field, still works."""
         resp = client.post(
@@ -286,7 +250,7 @@ class TestAuthAPI:
     def test_invalid_auth_type_rejected(self, client):
         """Invalid auth type returns 422."""
         resp = client.post(
-            "/v1/check/dns",
+            "/v1/scan",
             json={
                 "target": "example.com",
                 "auth": {"type": "oauth2", "token": "x"},
@@ -315,23 +279,3 @@ class TestAuthAPI:
             },
         )
         assert resp.status_code == 200
-
-    def test_check_domain_accepts_auth(self, client):
-        resp = client.post(
-            "/v1/check/dns",
-            json={
-                "target": "example.com",
-                "auth": {"type": "bearer", "token": "tok"},
-            },
-        )
-        assert resp.status_code == 200
-
-    def test_hop_by_hop_header_rejected_via_api(self, client):
-        resp = client.post(
-            "/v1/check/dns",
-            json={
-                "target": "example.com",
-                "auth": {"type": "header", "headers": {"Host": "evil.com"}},
-            },
-        )
-        assert resp.status_code == 422
