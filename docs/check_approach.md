@@ -86,7 +86,7 @@ Scanners must handle their own errors. The orchestrator provides a safety net bu
 6. Add integration test in `tests/test_scan.py` against a real target
 
 What you don't need to change:
-- `api/scan.py` — handles any registered scanner automatically. Individual endpoints (`/v1/check/{type}`) are generated from `CheckType` at import time, so new enum values get their own route automatically. Fast checks return 200 inline; slow checks (ssl_deep, cve) return 202 with a job ID.
+- `api/scan.py` — handles any registered scanner automatically. Individual endpoints (`/v1/check/{type}`) are generated from `CheckType` at import time, so new enum values get their own route automatically. Fast checks return 200 inline; slow checks (ssl_deep, cve) return 202 with a job ID. New scanners are NOT automatically added to the bundle scan — the bundle runs a fixed set (headers, ssl, dns, web, whois for domains; headers, ssl, web for IPs). To include a new scanner in the bundle, update `DOMAIN_CHECKS`/`IP_CHECKS` in `models.py`.
 
 ---
 

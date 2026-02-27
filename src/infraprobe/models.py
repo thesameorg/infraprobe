@@ -36,13 +36,12 @@ class CheckType(StrEnum):
     WHOIS = "whois"
 
 
-# Default checks for domain targets (light only — deep checks are opt-in)
+# Default checks for domain targets
 DOMAIN_CHECKS: list[CheckType] = [
     CheckType.HEADERS,
     CheckType.SSL,
     CheckType.DNS,
-    CheckType.TECH,
-    CheckType.BLACKLIST,
+    CheckType.WEB,
     CheckType.WHOIS,
 ]
 
@@ -50,8 +49,7 @@ DOMAIN_CHECKS: list[CheckType] = [
 IP_CHECKS: list[CheckType] = [
     CheckType.HEADERS,
     CheckType.SSL,
-    CheckType.TECH,
-    CheckType.BLACKLIST,
+    CheckType.WEB,
 ]
 
 # Checks that require a domain name (not applicable to IP targets)
@@ -130,12 +128,12 @@ class SingleCheckRequest(BaseModel):
 
 
 class ScanRequest(BaseModel):
+    """Used internally for async job storage (individual /check/ jobs)."""
+
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
-                {"target": "example.com", "checks": ["headers", "ssl", "dns"]},
-                {"target": "example.com"},
-                {"target": "example.com", "checks": ["cve"], "async_mode": True},
+                {"target": "example.com", "checks": ["headers"]},
             ]
         }
     )
@@ -147,19 +145,7 @@ class ScanRequest(BaseModel):
     )
     checks: list[CheckType] | None = Field(
         default=None,
-        description=(
-            "Check types to run. When omitted, auto-detects based on target type:"
-            " domains get headers/ssl/dns/tech/blacklist/whois; IPs get headers/ssl/tech/blacklist."
-        ),
-    )
-    async_mode: bool = Field(default=False, description="Force async (202) response even for fast checks.")
-    webhook_url: Annotated[str, Field(max_length=2048)] | None = Field(
-        default=None, description="URL to POST results to when scan completes. Providing this forces async mode."
-    )
-    webhook_secret: str | None = Field(
-        default=None,
-        exclude=True,
-        description="HMAC-SHA256 key for signing webhook payloads (sent in X-InfraProbe-Signature header).",
+        description="Check types to run.",
     )
     auth: AuthConfig | None = Field(
         default=None,
@@ -263,5 +249,3 @@ class Job(BaseModel):
     request: ScanRequest
     result: ScanResponse | None = None
     error: str | None = None
-    webhook_status: str | None = None
-    webhook_delivered_at: datetime | None = None

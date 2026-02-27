@@ -6,7 +6,7 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from helpers import poll_until_done, submit_scan
+from helpers import submit_scan
 
 from infraprobe.formatters.csv import scan_response_to_csv, target_result_to_csv
 from infraprobe.formatters.sarif import scan_response_to_sarif, target_result_to_sarif
@@ -178,9 +178,8 @@ class TestFormatQueryParam:
     """Test ?format= query parameter on live endpoints."""
 
     def test_default_format_is_json(self, client):
-        """POST /v1/scan returns 202; poll result is JSON by default."""
-        result = submit_scan(client, {"target": "example.com", "checks": ["headers"]})
-        # submit_scan returns the ScanResponse dict from the completed job
+        """POST /v1/scan returns 200; result is JSON by default."""
+        result = submit_scan(client, {"target": "example.com"})
         assert "results" in result
 
     def test_explicit_json_format(self, client):
@@ -190,13 +189,8 @@ class TestFormatQueryParam:
         assert "results" in resp.json()
 
     def test_sarif_format_on_scan(self, client):
-        """Submit scan (async), poll until done, then GET /v1/scan/{job_id}?format=sarif."""
-        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
-        assert resp.status_code == 202
-        job_id = resp.json()["job_id"]
-        poll_until_done(client, job_id)
-
-        resp = client.get(f"/v1/scan/{job_id}?format=sarif")
+        """POST /v1/scan?format=sarif returns SARIF directly."""
+        resp = client.post("/v1/scan?format=sarif", json={"target": "example.com"})
         assert resp.status_code == 200
         assert "sarif" in resp.headers["content-type"]
 
@@ -240,7 +234,7 @@ class TestFormatQueryParam:
 
     def test_error_responses_stay_json(self, client):
         """Error responses (blocked target) should always be JSON, not SARIF."""
-        resp = client.post("/v1/scan?format=sarif", json={"target": "127.0.0.1", "checks": ["headers"]})
+        resp = client.post("/v1/scan?format=sarif", json={"target": "127.0.0.1"})
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("application/json")
         assert "detail" in resp.json()
@@ -346,13 +340,8 @@ class TestCsvFormatQueryParam:
     """Test ?format=csv query parameter on live endpoints."""
 
     def test_csv_format_on_scan(self, client):
-        """Submit scan (async), poll until done, then GET /v1/scan/{job_id}?format=csv."""
-        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
-        assert resp.status_code == 202
-        job_id = resp.json()["job_id"]
-        poll_until_done(client, job_id)
-
-        resp = client.get(f"/v1/scan/{job_id}?format=csv")
+        """POST /v1/scan?format=csv returns CSV directly."""
+        resp = client.post("/v1/scan?format=csv", json={"target": "example.com"})
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/csv")
         rows = _parse_csv(resp.text)
@@ -375,7 +364,7 @@ class TestCsvFormatQueryParam:
 
     def test_csv_error_responses_stay_json(self, client):
         """Error responses (blocked target) should always be JSON, not CSV."""
-        resp = client.post("/v1/scan?format=csv", json={"target": "127.0.0.1", "checks": ["headers"]})
+        resp = client.post("/v1/scan?format=csv", json={"target": "127.0.0.1"})
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("application/json")
         assert "detail" in resp.json()

@@ -42,13 +42,13 @@ def test_nmap_backpressure_slow_cve_returns_202(client):
         assert "job_id" in body
 
 
-def test_nmap_backpressure_bundle_scan_ports_sync(client):
-    """Bundle scan with only ports (fast) → sync 200, times out when nmap slots exhausted."""
+def test_nmap_backpressure_ports_check_sync_times_out(client):
+    """Ports check via /v1/check/ports → sync 200, times out when nmap slots exhausted."""
     with _exhaust_nmap_slots():
-        resp = client.post("/v1/scan", json={"target": "scanme.nmap.org", "checks": ["ports"]})
+        resp = client.post("/v1/check/ports", json={"target": "scanme.nmap.org"})
         assert resp.status_code == 200
         body = resp.json()
-        ports_result = body["results"][0]["results"]["ports"]
+        ports_result = body["results"]["ports"]
         assert ports_result["error"] is not None
 
 
@@ -59,13 +59,8 @@ def test_nmap_backpressure_non_nmap_unaffected(client):
         assert resp.status_code == 200
 
 
-def test_nmap_backpressure_bundle_async_queues(client):
-    """Bundle scan with async_mode=True queues nmap checks even when slots exhausted."""
+def test_nmap_backpressure_bundle_scan_unaffected(client):
+    """Bundle scan runs non-nmap checks — not affected by exhausted nmap slots."""
     with _exhaust_nmap_slots():
-        resp = client.post(
-            "/v1/scan",
-            json={"target": "scanme.nmap.org", "checks": ["ports"], "async_mode": True},
-        )
-        assert resp.status_code == 202
-        body = resp.json()
-        assert "job_id" in body
+        resp = client.post("/v1/scan", json={"target": "example.com"})
+        assert resp.status_code == 200

@@ -66,14 +66,21 @@ app = FastAPI(
     lifespan=lifespan,
     openapi_tags=[
         {
-            "name": "Scans",
-            "description": "Bundle scan endpoints. Fast checks return 200 inline; "
-            "slow checks or async_mode return 202 with job_id for polling.",
+            "name": "Scan",
+            "description": "Bundle scan — runs the core check suite and returns 200 inline.",
         },
         {
             "name": "Checks",
-            "description": "Individual check endpoints. Fast checks return 200 inline, "
-            "slow checks (ssl_deep, cve) return 202 async.",
+            "description": "Individual check endpoints for the active scanner suite.",
+        },
+        {
+            "name": "Deprecated",
+            "description": "Legacy check endpoints kept for backwards compatibility. "
+            "Consider using the bundle scan or active checks instead.",
+        },
+        {
+            "name": "Jobs",
+            "description": "Poll async job status and retrieve results.",
         },
     ],
 )

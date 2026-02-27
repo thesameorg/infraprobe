@@ -17,8 +17,6 @@ All error responses are JSON with this structure:
 | 403 | `forbidden` | Missing or invalid `x-rapidapi-proxy-secret` header |
 | 404 | `not_found` | Job ID does not exist |
 | 422 | `invalid_target` | Target format is invalid, or a DNS-only check was requested for an IP |
-| 422 | `threshold_exceeded` | `fail_on` threshold matched — findings at or above severity exist |
-| 422 | `invalid_parameter` | Invalid `fail_on` severity value |
 | 500 | `internal_error` | Unexpected server error |
 | 503 | `shutting_down` | Server is shutting down; retry after a moment |
 
@@ -52,22 +50,15 @@ InfraProbe blocks scanning of private and reserved IP ranges (10.x.x.x, 172.16-3
 
 ### DNS-only checks fail for IP targets
 
-The `dns`, `dns_deep`, and `whois` checks require a domain name. Using them with IP targets returns a 422 error. InfraProbe auto-detects target type — if you omit `checks`, IP targets automatically get IP-appropriate defaults (headers, ssl, tech, blacklist).
+The `dns`, `dns_deep`, and `whois` checks require a domain name. Using them with IP targets via `/v1/check/{type}` returns a 422 error. The bundle scan (`POST /v1/scan`) auto-detects target type — IP targets get headers, ssl, web; domains get headers, ssl, dns, web, whois.
 
 ### Scan returns mostly "info" findings
 
-Info-level findings are positive signals (e.g., "Valid certificate", "TLS 1.3 supported"). If you only see info findings, your target's security posture is good for the checks that ran. Consider running additional checks like `web`, `ports`, or `cve` for deeper coverage.
+Info-level findings are positive signals (e.g., "Valid certificate", "TLS 1.3 supported"). If you only see info findings, your target's security posture is good for the checks that ran. Consider running additional individual checks like `ports` or `cve` via `/v1/check/{type}` for deeper coverage.
 
 ### Deep scans are slow
 
 Deep scans use more thorough tools and have a 30-second timeout (vs 10 seconds for light scans). `cve` performs version detection plus NVD API lookups, and `ssl_deep` runs full SSLyze analysis. This is expected behavior.
-
-### Webhook not received
-
-- Verify your webhook URL is publicly accessible
-- Check that InfraProbe can reach your server (not blocked by firewall)
-- Webhooks are retried up to 3 times with a 5-second timeout per attempt
-- Poll the job status endpoint to confirm the scan completed
 
 ### CSV or SARIF output is empty
 
@@ -90,9 +81,8 @@ The default `memory` job store loses all jobs when the server restarts. Set `INF
 
 ## Performance Tips
 
-- **Use specific checks** instead of running all defaults when you only need certain data
-- **All bundle scans are async** — `POST /v1/scan` always returns 202, so there's no HTTP timeout concern for long scans
-- **Batch targets** in a single `/v1/scan` request (up to 10) rather than making separate requests
+- **Bundle scan is fast** — `POST /v1/scan` runs all checks in parallel and returns 200 inline. P95 ~5s for domains, ~3s for IPs.
+- **Use individual checks** (`/v1/check/{type}`) when you only need one specific scanner
 - **Start with light scans** — deep variants provide more detail but take longer; use them when light results indicate areas of concern
 
 ## Timeouts

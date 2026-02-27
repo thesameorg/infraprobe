@@ -6,26 +6,16 @@ All endpoints are under the `/v1` prefix.
 
 ### Bundle Scan
 
-Scan a target with multiple checks at once. Fast checks return `200` with inline results; slow checks (ssl_deep, cve) or `async_mode: true` return `202` with a job ID for polling.
+Scan a target with a fixed suite of security checks. Always returns `200` with inline results.
 
 ```bash
-# Scan a domain with default checks — returns 200 with results inline
+# Scan a domain — returns 200 with results inline
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{"target": "example.com"}'
-
-# Scan with specific checks
-curl -X POST https://your-instance/v1/scan \
-  -H "Content-Type: application/json" \
-  -d '{"target": "example.com", "checks": ["headers", "ssl", "dns"]}'
-
-# Force async mode (returns 202 + job_id)
-curl -X POST https://your-instance/v1/scan \
-  -H "Content-Type: application/json" \
-  -d '{"target": "example.com", "async_mode": true}'
 ```
 
-Sync response (`200 OK` — fast checks):
+Response (`200 OK`):
 
 ```json
 {
@@ -34,40 +24,26 @@ Sync response (`200 OK` — fast checks):
 }
 ```
 
-Async response (`202 Accepted` — slow checks or async_mode):
-
-```json
-{
-  "job_id": "a1b2c3d4e5f6...",
-  "status": "pending",
-  "created_at": "2025-01-15T10:30:00Z"
-}
-```
-
 **Request body:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `target` | string | Yes | Domain, IP address, or host:port to scan |
-| `checks` | string[] | No | Check types to run (auto-detected from target type if omitted) |
-| `async_mode` | bool | No | Force 202 async even for fast checks (default: false) |
 | `auth` | object | No | [Auth credentials](checks/auth.md) to send to scan target |
-| `webhook_url` | string | No | URL to receive results when scan completes (forces async) |
-| `webhook_secret` | string | No | HMAC-SHA256 key for signing webhook payloads (sent in `X-InfraProbe-Signature` header) |
 
-**Auto-detection:** When `checks` is omitted, InfraProbe selects defaults based on target type:
-- **Domains:** headers, ssl, dns, tech, blacklist, whois
-- **IPs:** headers, ssl, tech, blacklist
-
-DNS-only checks (`dns`, `dns_deep`, `whois`) are rejected for IP targets with a 422 error.
+**Fixed check suite** (automatically selected based on target type):
+- **Domains:** headers, ssl, dns, web, whois
+- **IPs:** headers, ssl, web
 
 ### Poll for Results
+
+For async individual checks (e.g. CVE), poll the job endpoint:
 
 ```bash
 curl https://your-instance/v1/scan/a1b2c3d4e5f6...
 ```
 
-Returns the full job with its current status (`pending`, `running`, `completed`, or `failed`). When completed, `result` contains the scan response with findings. The `format` and `fail_on` query parameters work on this endpoint (see below).
+Returns the full job with its current status (`pending`, `running`, `completed`, or `failed`). When completed, `result` contains the scan response with findings. The `format` query parameter works on this endpoint (see below).
 
 ### Single Check
 
@@ -137,22 +113,6 @@ A scan response contains one `TargetResult` per target, with a severity summary:
 - `error` — non-null string if the scanner failed; other checks still complete normally
 - `summary` — severity counts aggregated across all findings (per-target and per-scan)
 
-## CI/CD Gating with `fail_on`
-
-Use the `fail_on` query parameter to gate CI/CD pipelines based on finding severity:
-
-```bash
-# Fail if any high or critical findings exist
-curl "https://your-instance/v1/scan/a1b2c3d4...?fail_on=high,critical"
-
-# Fail on medium and above
-curl -X POST "https://your-instance/v1/check/headers?fail_on=medium" \
-  -H "Content-Type: application/json" \
-  -d '{"target": "example.com"}'
-```
-
-When findings at or above the threshold exist, the response is `422` with `error: "threshold_exceeded"` and the full results included. Pipelines can check the HTTP status code — no JSON parsing needed for pass/fail.
-
 ## Output Formats
 
 Use the `format` query parameter to change the response format.
@@ -200,22 +160,6 @@ curl -X POST "https://your-instance/v1/check/headers?format=csv" \
 ```
 
 Columns: `target`, `check`, `severity`, `title`, `description`, `details`
-
-## Webhooks
-
-Instead of polling, provide a `webhook_url` to get results pushed to you:
-
-```bash
-curl -X POST https://your-instance/v1/scan \
-  -H "Content-Type: application/json" \
-  -d '{
-    "target": "example.com",
-    "webhook_url": "https://your-server/callback",
-    "webhook_secret": "your-secret-key"
-  }'
-```
-
-When the scan completes, InfraProbe sends a POST request to your webhook URL with the scan results as the body. If you provide a `webhook_secret`, the payload is signed with HMAC-SHA256 in the `X-InfraProbe-Signature` header for verification.
 
 ## Authentication
 

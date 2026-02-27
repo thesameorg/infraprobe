@@ -1,26 +1,37 @@
 # InfraProbe
 
-Infrastructure security scanning API. Accepts target domains/IPs, runs security checks in parallel, returns structured JSON results with findings and severity summaries.
+Infrastructure security scanning API. Send a domain or IP, get structured security findings back. One endpoint, one request, one response.
 
 ## What it does
 
-Three endpoint styles, all under `/v1`:
+**`POST /v1/scan`** — send a target, get security results. Always returns `200` with inline results.
 
-- **`POST /v1/scan`** — bundle endpoint. Fast checks return 200 inline; slow checks (ssl_deep, cve) or `async_mode` return 202 with job_id. Poll `GET /v1/scan/{job_id}` for results.
-- **`POST /v1/check/{type}`** — individual check endpoints (e.g. `/v1/check/headers`). Fast checks return 200 inline; slow checks (ssl_deep, cve) return 202.
-- **`GET /v1/scan/{job_id}`** — poll for job status and results. Supports `?format=sarif|csv` and `?fail_on=high,critical`.
+- **Domains** get: headers, ssl, dns, web, whois
+- **IPs** get: headers, ssl, web
 
-| Check | Description | Default |
-|-------|-------------|---------|
+All checks run in parallel. P95 wall-clock ~5s.
+
+```bash
+curl -X POST localhost:8080/v1/scan \
+  -H "Content-Type: application/json" \
+  -d '{"target": "example.com"}'
+```
+
+Individual check endpoints are also available under `/v1/check/{type}` for all 12 scanner types (headers, ssl, ssl_deep, dns, dns_deep, tech, blacklist, blacklist_deep, web, whois, ports, cve).
+
+| Check | Description | In bundle scan |
+|-------|-------------|----------------|
 | `headers` | Missing security headers, info-leaking headers | Yes |
-| `ssl` / `ssl_deep` | TLS certificate, protocols, ciphers / deep SSLyze analysis | Yes / opt-in |
-| `dns` / `dns_deep` | DNS records, SPF, DMARC / deep checkdmarc analysis | Yes (domains) / opt-in |
-| `tech` | Technology fingerprinting (Wappalyzer) | Yes |
-| `blacklist` / `blacklist_deep` | DNSBL checking (2 zones / 15 zones) | Yes / opt-in |
+| `ssl` | TLS certificate, protocols, ciphers | Yes |
+| `dns` | DNS records, SPF, DMARC | Yes (domains) |
+| `web` | CORS, exposed paths, mixed content, security.txt | Yes |
 | `whois` | Domain registration and expiry | Yes (domains) |
-| `web` | CORS, exposed paths, mixed content, security.txt | Opt-in |
-| `ports` | Port scanning — nmap top-20 | Opt-in |
-| `cve` | CVE detection — nmap version detection + NVD API | Opt-in |
+| `ssl_deep` | Deep SSLyze analysis | No — `/v1/check/ssl_deep` |
+| `dns_deep` | Deep checkdmarc analysis | No — `/v1/check/dns_deep` |
+| `tech` | Technology fingerprinting (Wappalyzer) | No — `/v1/check/tech` |
+| `blacklist` / `blacklist_deep` | DNSBL checking | No — `/v1/check/blacklist` |
+| `ports` | Port scanning — nmap top-20 | No — `/v1/check/ports` |
+| `cve` | CVE detection — nmap + NVD API | No — `/v1/check/cve` |
 
 ## Quick start
 
@@ -31,13 +42,10 @@ uv sync
 # Run dev server (port 8080, hot reload)
 uv run python main.py
 
-# Scan a domain (async — returns job_id)
+# Scan a domain — returns 200 with results
 curl -X POST localhost:8080/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"]}'
-
-# Poll for results
-curl localhost:8080/v1/scan/<job_id>
+  -d '{"target": "example.com"}'
 
 # Single check (inline result)
 curl -X POST localhost:8080/v1/check/headers \
@@ -52,13 +60,6 @@ curl -X POST localhost:8080/v1/check/headers \
 | JSON (default) | `?format=json` | `application/json` |
 | SARIF 2.1.0 | `?format=sarif` | `application/sarif+json` |
 | CSV | `?format=csv` | `text/csv` |
-
-## CI/CD gating
-
-```bash
-# Fail pipeline if high or critical findings exist (returns 422 if threshold exceeded)
-curl "localhost:8080/v1/scan/<job_id>?fail_on=high,critical"
-```
 
 ## Local development
 
@@ -108,16 +109,17 @@ FIRESTORE_EMULATOR_HOST=localhost:8686 uv run pytest tests/test_storage_firestor
 ## Architecture
 
 ```
-POST /v1/scan         → api/scan.py (orchestrator) → scanners (parallel) → JobStore → 202
+POST /v1/scan         → api/scan.py (orchestrator) → scanners (parallel) → 200
 POST /v1/check/{type} → api/scan.py (single check) → one scanner → 200 or 202
-GET  /v1/scan/{id}    → JobStore → results
+GET  /v1/scan/{id}    → JobStore → results (for async individual checks)
 ```
 
-- Async-first — bundle scans run in background, poll for results
+- Bundle scan is always sync — no job polling needed
+- All checks run in parallel via `asyncio.gather`
 - SSRF protection via IP blocklist before any scanner runs
 - Each scanner is isolated — one failure doesn't affect others
 - Timeout enforcement at orchestrator level (budget + 0.5s buffer)
-- Job storage: in-memory (dev) or Firestore (production, survives scale-to-zero)
+- Job storage: in-memory (dev) or Firestore (production, for async individual checks)
 - Deployed on Google Cloud Run with CI/CD via GitHub Actions
 
 See [docs/architecture.md](docs/architecture.md) for full details, [docs/guide/](docs/guide/) for API consumer docs.

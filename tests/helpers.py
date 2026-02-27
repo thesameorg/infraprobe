@@ -20,17 +20,10 @@ def poll_until_done(client: TestClient, job_id: str, timeout: float = 30) -> dic
 
 
 def submit_scan(client: TestClient, payload: dict, timeout: float = 30) -> dict:
-    """Submit POST /v1/scan and wait for completion. Returns ScanResponse dict.
-
-    Handles both sync (200 → immediate ScanResponse) and async (202 → poll).
-    """
+    """Submit POST /v1/scan. Always returns 200 with ScanResponse dict."""
     resp = client.post("/v1/scan", json=payload)
-    if resp.status_code == 200:
-        return resp.json()  # Sync path — direct ScanResponse
-    assert resp.status_code == 202, f"Expected 200 or 202, got {resp.status_code}: {resp.text}"
-    job = poll_until_done(client, resp.json()["job_id"], timeout)
-    assert job["status"] == "completed", f"Scan failed: {job.get('error')}"
-    return job["result"]
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    return resp.json()
 
 
 def submit_check(client: TestClient, check_type: str, payload: dict, timeout: float = 30) -> dict:

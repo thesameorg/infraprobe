@@ -6,7 +6,6 @@ the Firestore emulator (skipped if unavailable).
 """
 
 import asyncio
-from datetime import UTC, datetime
 
 import pytest
 
@@ -96,18 +95,6 @@ class TestJobStoreContract:
             assert job.status == JobStatus.FAILED
             assert job.error == "Something went wrong"
             assert job.result is None
-
-        asyncio.get_event_loop().run_until_complete(_test())
-
-    def test_update_webhook_status(self, store):
-        async def _test():
-            await store.create("job-1", _make_request())
-            now = datetime.now(UTC)
-            await store.update_webhook_status("job-1", "delivered", now)
-
-            job = await store.get("job-1")
-            assert job.webhook_status == "delivered"
-            assert job.webhook_delivered_at is not None
 
         asyncio.get_event_loop().run_until_complete(_test())
 

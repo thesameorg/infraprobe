@@ -10,7 +10,6 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, Response
 
 from infraprobe.blocklist import (
-    BlockedTargetError,
     InvalidTargetError,
     validate_target,
 )
@@ -31,62 +30,19 @@ from infraprobe.models import (
     OutputFormat,
     ScanRequest,
     ScanResponse,
-    Severity,
     SingleCheckRequest,
     TargetResult,
 )
 from infraprobe.storage.base import JobStore
 from infraprobe.target import ScanContext, parse_target
-from infraprobe.webhook import _validate_webhook_url, maybe_deliver_webhook
 
 router = APIRouter()
 logger = logging.getLogger("infraprobe.scanner")
 
 FormatParam = Annotated[OutputFormat, Query(alias="format")]
-FailOnParam = Annotated[str | None, Query(alias="fail_on")]
 
-# Severity ordering for fail_on threshold comparison
-_SEVERITY_RANK: dict[str, int] = {
-    Severity.CRITICAL: 0,
-    Severity.HIGH: 1,
-    Severity.MEDIUM: 2,
-    Severity.LOW: 3,
-    Severity.INFO: 4,
-}
-
-
-def _check_fail_on(result: ScanResponse | TargetResult, fail_on: str | None) -> JSONResponse | None:
-    """If fail_on is set and findings at or above threshold exist, return 422 response."""
-    if not fail_on:
-        return None
-
-    thresholds = {s.strip().lower() for s in fail_on.split(",")}
-    valid_severities = set(_SEVERITY_RANK.keys())
-    invalid = thresholds - valid_severities
-    if invalid:
-        return JSONResponse(
-            status_code=422,
-            content={"error": "invalid_parameter", "detail": f"Invalid fail_on severity: {', '.join(sorted(invalid))}"},
-        )
-
-    max_rank = max(_SEVERITY_RANK[s] for s in thresholds)
-
-    # Collect all findings
-    if isinstance(result, ScanResponse):
-        all_findings = [f for tr in result.results for cr in tr.results.values() for f in cr.findings]
-    else:
-        all_findings = [f for cr in result.results.values() for f in cr.findings]
-
-    exceeding = [f for f in all_findings if _SEVERITY_RANK.get(f.severity, 5) <= max_rank]
-    if exceeding:
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": "threshold_exceeded",
-                "detail": f"Found {len(exceeding)} finding(s) at or above threshold",
-                "result": result.model_dump(mode="json"),
-            },
-        )
+# Active checks included in the bundle scan — rest are accessible via /check/{type} (deprecated tag)
+_ACTIVE_CHECKS = frozenset({CheckType.HEADERS, CheckType.SSL, CheckType.DNS, CheckType.WEB, CheckType.WHOIS})
 
 
 # ---------------------------------------------------------------------------
@@ -254,25 +210,6 @@ def _format_target_result(result: TargetResult, fmt: OutputFormat) -> TargetResu
     return result
 
 
-def _resolve_checks(target: str, checks: list[CheckType] | None) -> list[CheckType]:
-    """Resolve checks list: auto-detect from target type if None, validate if explicit."""
-    is_ip = parse_target(target).is_ip
-    if checks is not None:
-        # Validate: reject DNS-only checks on IP targets
-        if is_ip:
-            dns_only = set(checks) & DNS_ONLY_CHECKS
-            if dns_only:
-                raise InvalidTargetError(
-                    f"DNS checks ({', '.join(sorted(str(c) for c in dns_only))}) not applicable to IP target: {target}"
-                )
-        return checks
-
-    # Auto-detect based on target type
-    if is_ip:
-        return list(IP_CHECKS)
-    return list(DOMAIN_CHECKS)
-
-
 async def _run_scan_with_contexts(
     contexts: list[ScanContext],
     checks: list[CheckType],
@@ -352,8 +289,6 @@ async def _run_scan_job(
     store: JobStore,
     job_id: str,
     request: ScanRequest,
-    webhook_url: str | None = None,
-    webhook_secret: str | None = None,
 ) -> None:
     try:
         await store.update_status(job_id, JobStatus.RUNNING)
@@ -370,81 +305,34 @@ async def _run_scan_job(
         )
         await store.fail(job_id, str(exc))
 
-    if webhook_url:
-        job = await store.get(job_id)
-        if job:
-            await maybe_deliver_webhook(
-                job,
-                webhook_url,
-                webhook_secret,
-                store=store,
-                timeout=settings.webhook_timeout,
-                max_retries=settings.webhook_max_retries,
-            )
-
 
 # ---------------------------------------------------------------------------
-# POST /v1/scan — sync (200) for fast checks, async (202) for slow checks
+# POST /v1/scan — always sync (200), fixed check bundle
 # ---------------------------------------------------------------------------
 
 
 @router.post(
     "/scan",
     response_model=None,
-    tags=["Scans"],
+    tags=["Scan"],
     summary="Run security scan",
     description=(
-        "Submit a security scan for a target. "
-        "Fast checks (headers, ssl, dns, tech, blacklist, whois, web) return **200** with inline results. "
-        "Slow checks (ssl_deep, cve) or `async_mode: true` return **202** with a job_id "
-        "for polling via `GET /v1/scan/{job_id}`. "
-        "Omit `checks` to auto-detect based on target type (domain vs IP)."
+        "Run a security scan against a single target. "
+        "Returns **200** with inline results. "
+        "Domains get headers/ssl/dns/web/whois; IPs get headers/ssl/web. "
+        "Use `?format=sarif|csv` for alternative output formats."
     ),
 )
-async def scan(request: ScanRequest, req: Request) -> JSONResponse:
-    if _shutting_down:
-        return JSONResponse(status_code=503, content={"error": "shutting_down", "detail": "Server is shutting down"})
+async def scan(request: SingleCheckRequest, fmt: FormatParam = OutputFormat.JSON) -> ScanResponse | Response:
+    # Resolve fixed checks based on target type
+    is_ip = parse_target(request.target).is_ip
+    checks = list(IP_CHECKS) if is_ip else list(DOMAIN_CHECKS)
 
-    # Resolve checks (auto-detect if None)
-    resolved_checks = _resolve_checks(request.target, request.checks)
-    request = request.model_copy(update={"checks": resolved_checks})
-
-    # Validate target once — reuse context for sync path
+    # Validate target + run checks
     ctx = await validate_target(request.target)
+    result = await _run_scan_with_contexts([ctx], checks, request.auth)
 
-    # Validate webhook URL (SSRF protection)
-    webhook_url = request.webhook_url
-    webhook_secret = request.webhook_secret
-    if webhook_url:
-        try:
-            await _validate_webhook_url(webhook_url)
-        except BlockedTargetError as exc:
-            raise InvalidTargetError(str(exc)) from exc
-        except ValueError as exc:
-            raise InvalidTargetError(str(exc)) from exc
-
-    # Decide sync vs async
-    force_async = request.async_mode or webhook_url is not None
-    has_async_checks = bool(set(resolved_checks) & _ASYNC_CHECKS)
-
-    if has_async_checks or force_async:
-        # ASYNC path — 202 + job_id
-        store: JobStore = req.app.state.job_store
-        job_id = uuid.uuid4().hex
-        job = await store.create(job_id, request)
-
-        task = asyncio.create_task(_run_scan_job(store, job_id, request, webhook_url, webhook_secret))
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
-
-        return JSONResponse(
-            status_code=202,
-            content=JobCreate(job_id=job.job_id, status=job.status, created_at=job.created_at).model_dump(mode="json"),
-        )
-
-    # SYNC path — 200 inline
-    result = await _run_scan_with_contexts([ctx], resolved_checks, request.auth)
-    return JSONResponse(status_code=200, content=result.model_dump(mode="json"))
+    return _format_scan_response(result, fmt)
 
 
 # ---------------------------------------------------------------------------
@@ -455,32 +343,25 @@ async def scan(request: ScanRequest, req: Request) -> JSONResponse:
 @router.get(
     "/scan/{job_id}",
     response_model=None,
-    tags=["Scans"],
-    summary="Get scan job status and results",
+    tags=["Jobs"],
+    summary="Get job status and results",
     description=(
-        "Poll an async scan job by ID. Returns job status (`pending`, `running`, `completed`, `failed`) "
-        "and results when completed. Supports `?format=sarif|csv` for output format and "
-        "`?fail_on=high,critical` for CI/CD gating (returns 422 when matching findings exist)."
+        "Poll an async job by ID. Returns job status (`pending`, `running`, `completed`, `failed`) "
+        "and results when completed. Supports `?format=sarif|csv` for output format."
     ),
 )
 async def get_scan_job(
     job_id: str,
     req: Request,
     fmt: FormatParam = OutputFormat.JSON,
-    fail_on: FailOnParam = None,
 ) -> Job | JSONResponse | Response:
     store: JobStore = req.app.state.job_store
     job = await store.get(job_id)
     if job is None:
         return JSONResponse(status_code=404, content={"error": "not_found", "detail": "Job not found"})
 
-    # Apply fail_on and format to completed results
-    if job.status == JobStatus.COMPLETED and job.result is not None:
-        fail_response = _check_fail_on(job.result, fail_on)
-        if fail_response:
-            return fail_response
-        if fmt != OutputFormat.JSON:
-            return _format_scan_response(job.result, fmt)
+    if job.status == JobStatus.COMPLETED and job.result is not None and fmt != OutputFormat.JSON:
+        return _format_scan_response(job.result, fmt)
 
     return job
 
@@ -534,18 +415,12 @@ def _make_check_handler(ct: CheckType):
     async def handler(
         request: SingleCheckRequest,
         fmt: FormatParam = OutputFormat.JSON,
-        fail_on: FailOnParam = None,
-    ) -> TargetResult | JSONResponse | Response:
+    ) -> TargetResult | Response:
         # Reject DNS-only checks on IP targets
         if ct in DNS_ONLY_CHECKS and parse_target(request.target).is_ip:
             raise InvalidTargetError(f"Check type {ct} not applicable to IP targets")
 
         result = await _run_single_check(ct, request.target, request.auth)
-
-        fail_response = _check_fail_on(result, fail_on)
-        if fail_response:
-            return fail_response
-
         return _format_target_result(result, fmt)
 
     handler.__name__ = f"check_{ct.value}"
@@ -590,11 +465,12 @@ def _make_slow_check_handler(ct: CheckType):
 
 # Register a dedicated route per check type under /check/{type}
 for _ct in CheckType:
+    _tag = "Checks" if _ct in _ACTIVE_CHECKS else "Deprecated"
     if _ct in _ASYNC_CHECKS:
         _handler = _make_slow_check_handler(_ct)
-        router.add_api_route(f"/check/{_ct.value}", _handler, methods=["POST"], tags=["Checks"])
+        router.add_api_route(f"/check/{_ct.value}", _handler, methods=["POST"], tags=[_tag])
     else:
         _handler = _make_check_handler(_ct)
         router.add_api_route(
-            f"/check/{_ct.value}", _handler, methods=["POST"], response_model=TargetResult, tags=["Checks"]
+            f"/check/{_ct.value}", _handler, methods=["POST"], response_model=TargetResult, tags=[_tag]
         )

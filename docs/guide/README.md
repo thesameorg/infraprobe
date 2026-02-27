@@ -4,23 +4,23 @@ InfraProbe is an infrastructure security scanning API. Send it a domain or IP ad
 
 ## Check Types
 
-| Check | Description | Default | Deep variant |
-|-------|-------------|---------|--------------|
+| Check | Description | In bundle scan | Deep variant |
+|-------|-------------|----------------|--------------|
 | [headers](checks/headers.md) | HTTP security headers | Yes | No |
 | [ssl](checks/ssl.md) | SSL/TLS certificate & protocol | Yes | [ssl_deep](checks/ssl.md#deep-scan) |
 | [dns](checks/dns.md) | DNS records, SPF, DMARC, CAA | Yes (domains) | [dns_deep](checks/dns.md#deep-scan) |
-| [tech](checks/tech.md) | Technology fingerprinting (Wappalyzer) | Yes | No |
-| [blacklist](checks/blacklist.md) | DNSBL spam/abuse lists | Yes | [blacklist_deep](checks/blacklist.md#deep-scan) |
+| [web](checks/web.md) | CORS, exposed paths, security.txt | Yes | No |
 | [whois](checks/whois.md) | Domain registration & expiry | Yes (domains) | No |
-| [web](checks/web.md) | CORS, exposed paths, security.txt | Opt-in | No |
-| [ports](checks/ports.md) | Open port detection (top 20) | Opt-in | No |
-| [cve](checks/cve.md) | CVE vulnerability detection | Opt-in | No |
+| [tech](checks/tech.md) | Technology fingerprinting (Wappalyzer) | No | No |
+| [blacklist](checks/blacklist.md) | DNSBL spam/abuse lists | No | [blacklist_deep](checks/blacklist.md#deep-scan) |
+| [ports](checks/ports.md) | Open port detection (top 20) | No | No |
+| [cve](checks/cve.md) | CVE vulnerability detection | No | No |
 
-**Default checks for domains:** headers, ssl, dns, tech, blacklist, whois
+**Bundle scan checks for domains:** headers, ssl, dns, web, whois
 
-**Default checks for IPs:** headers, ssl, tech, blacklist
+**Bundle scan checks for IPs:** headers, ssl, web
 
-DNS and whois checks require a domain name and are not available for IP targets.
+All other scanners are available via individual `/v1/check/{type}` endpoints. DNS and whois checks require a domain name and are not available for IP targets.
 
 ## Severity Levels
 
@@ -72,6 +72,6 @@ Every scan returns findings organized by target and check type, with severity su
 
 ## Guides
 
-- [Getting Started](getting-started.md) — endpoints, examples, output formats, async scans
+- [Getting Started](getting-started.md) — endpoints, examples, output formats
 - [Authenticated Scanning](checks/auth.md) — scan targets behind login walls with bearer tokens, basic auth, cookies, or custom headers
 - [Troubleshooting](troubleshooting.md) — error codes, common issues, performance tips

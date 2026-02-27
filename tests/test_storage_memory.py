@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 import pytest
 
 from infraprobe.models import (
@@ -74,15 +72,6 @@ async def test_fail(store: MemoryJobStore):
     job = await store.get("job-4")
     assert job.status == JobStatus.FAILED
     assert job.error == "boom"
-
-
-async def test_update_webhook_status(store: MemoryJobStore):
-    await store.create("job-5", _scan_request())
-    now = datetime.now(UTC)
-    await store.update_webhook_status("job-5", "delivered", now)
-    job = await store.get("job-5")
-    assert job.webhook_status == "delivered"
-    assert job.webhook_delivered_at == now
 
 
 async def test_ttl_expiration(store: MemoryJobStore):

@@ -252,16 +252,15 @@ class TestAuthAPI:
     """API-level tests that auth field is accepted and doesn't break responses."""
 
     def test_scan_accepts_auth_field(self, client):
-        """POST /v1/scan with auth field doesn't blow up (uses DNS check which ignores auth)."""
+        """POST /v1/scan with auth field doesn't blow up."""
         resp = client.post(
             "/v1/scan",
             json={
                 "target": "example.com",
-                "checks": ["dns"],
                 "auth": {"type": "bearer", "token": "test-token"},
             },
         )
-        assert resp.status_code == 200  # fast check → sync
+        assert resp.status_code == 200
         # Auth should not appear in response
         assert "test-token" not in resp.text
 
@@ -280,9 +279,9 @@ class TestAuthAPI:
         """Existing behavior — no auth field, still works."""
         resp = client.post(
             "/v1/scan",
-            json={"target": "example.com", "checks": ["dns"]},
+            json={"target": "example.com"},
         )
-        assert resp.status_code == 200  # fast check → sync
+        assert resp.status_code == 200
 
     def test_invalid_auth_type_rejected(self, client):
         """Invalid auth type returns 422."""
@@ -295,42 +294,27 @@ class TestAuthAPI:
         )
         assert resp.status_code == 422
 
-    def test_auth_excluded_from_async_job_response(self, client):
-        """POST /v1/scan with auth → GET /v1/scan/{job_id} shouldn't leak auth."""
+    def test_auth_excluded_from_scan_response(self, client):
+        """POST /v1/scan with auth — sync response shouldn't leak auth."""
         resp = client.post(
             "/v1/scan",
             json={
                 "target": "example.com",
-                "checks": ["dns"],
                 "auth": {"type": "bearer", "token": "super-secret-token"},
-                "async_mode": True,
             },
         )
-        assert resp.status_code == 202
-        job_id = resp.json()["job_id"]
-
-        # Poll for result — the token must not appear
-        import time
-
-        for _ in range(20):
-            poll = client.get(f"/v1/scan/{job_id}")
-            if poll.json()["status"] in ("completed", "failed"):
-                break
-            time.sleep(0.3)
-
-        poll_data = poll.text
-        assert "super-secret-token" not in poll_data
+        assert resp.status_code == 200
+        assert "super-secret-token" not in resp.text
 
     def test_scan_domain_accepts_auth(self, client):
         resp = client.post(
             "/v1/scan",
             json={
                 "target": "example.com",
-                "checks": ["dns"],
                 "auth": {"type": "bearer", "token": "tok"},
             },
         )
-        assert resp.status_code == 200  # fast check → sync
+        assert resp.status_code == 200
 
     def test_check_domain_accepts_auth(self, client):
         resp = client.post(

@@ -162,18 +162,18 @@ def test_blocked_target_logged(client, caplog):
 def test_scan_bundle_logs(client, caplog):
     """Bundle scan should log scan started, finished per check, target done, scan done."""
     with caplog.at_level(logging.INFO, logger="infraprobe"):
-        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers", "ssl"]})
-        assert resp.status_code == 200  # fast checks → sync
+        resp = client.post("/v1/scan", json={"target": "example.com"})
+        assert resp.status_code == 200
 
     messages = [r.message for r in caplog.records]
     assert any("scan started:" in m for m in messages)
-    assert sum("finished on" in m for m in messages) == 2  # headers + ssl
+    assert sum("finished on" in m for m in messages) == 5  # headers, ssl, dns, web, whois
     assert any("target done:" in m for m in messages)
     assert any("scan done:" in m for m in messages)
 
     scan_started = next(r for r in caplog.records if "scan started:" in r.message)
     assert scan_started.targets == ["example.com"]
-    assert set(scan_started.checks) == {"headers", "ssl"}
+    assert set(scan_started.checks) == {"headers", "ssl", "dns", "web", "whois"}
 
 
 def test_request_id_in_context(client, caplog):
