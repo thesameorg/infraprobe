@@ -29,7 +29,7 @@ def test_scan_headers_vulnweb(client):
 
 
 def test_scan_blocked_ip(client):
-    resp = client.post("/v1/scan", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"target": "127.0.0.1", "checks": ["headers"]})
     assert resp.status_code == 400
     body = resp.json()
     assert "blocked" in body["detail"].lower()
@@ -37,18 +37,18 @@ def test_scan_blocked_ip(client):
 
 
 def test_scan_invalid_target(client):
-    resp = client.post("/v1/scan", json={"targets": ["this-does-not-exist-xyz987.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"target": "this-does-not-exist-xyz987.com", "checks": ["headers"]})
     assert resp.status_code == 422
 
 
-def test_scan_empty_targets(client):
-    resp = client.post("/v1/scan", json={"targets": [], "checks": ["headers"]})
+def test_scan_missing_target(client):
+    resp = client.post("/v1/scan", json={"checks": ["headers"]})
     assert resp.status_code == 422
 
 
 def test_scan_invalid_check_type(client):
     """Requesting an unknown check type should return 422."""
-    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["nonexistent"]})
+    resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["nonexistent"]})
     assert resp.status_code == 422
 
 
@@ -103,7 +103,7 @@ def test_scan_ssl_google(client):
 
 def test_scan_ssl_combined(client):
     """Scan with both headers and SSL checks — both results should be present."""
-    data = submit_scan(client, {"targets": ["example.com"], "checks": ["headers", "ssl"]})
+    data = submit_scan(client, {"target": "example.com", "checks": ["headers", "ssl"]})
 
     result = data["results"][0]
     assert "headers" in result["results"]
@@ -163,7 +163,7 @@ def test_scan_dns_spf_dmarc(client):
 
 def test_scan_dns_combined(client):
     """Scan with DNS + headers — both results should be present."""
-    data = submit_scan(client, {"targets": ["example.com"], "checks": ["dns", "headers"]})
+    data = submit_scan(client, {"target": "example.com", "checks": ["dns", "headers"]})
 
     result = data["results"][0]
     assert "dns" in result["results"]
@@ -226,7 +226,7 @@ def test_scan_all_checks(client):
     """Scan with all 5 check types — all results should be present."""
     data = submit_scan(
         client,
-        {"targets": ["example.com"], "checks": ["headers", "ssl", "dns", "tech", "blacklist"]},
+        {"target": "example.com", "checks": ["headers", "ssl", "dns", "tech", "blacklist"]},
     )
 
     result = data["results"][0]
@@ -307,7 +307,7 @@ def test_scan_blacklist_deep(client):
 
 def test_v1_scan_sync_fast_checks(client):
     """/v1/scan with fast-only checks returns 200 with inline ScanResponse."""
-    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"]})
     assert resp.status_code == 200
     body = resp.json()
     assert "results" in body
@@ -317,7 +317,7 @@ def test_v1_scan_sync_fast_checks(client):
 
 def test_v1_scan_async_mode(client):
     """/v1/scan with async_mode=True returns 202 even for fast checks."""
-    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
+    resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
     assert resp.status_code == 202
     body = resp.json()
     assert "job_id" in body
@@ -330,7 +330,7 @@ def test_v1_scan_async_mode(client):
 
 def test_v1_default_checks_are_light(client):
     """Default checks should only include light checks, not deep ones."""
-    data = submit_scan(client, {"targets": ["example.com"]})
+    data = submit_scan(client, {"target": "example.com"})
     result = data["results"][0]
     # Should have light checks
     assert "headers" in result["results"]
@@ -442,7 +442,7 @@ def test_check_blocked_target(client):
 
 def test_unversioned_scan_removed(client):
     """Unversioned /scan should no longer be routed — expect 404."""
-    resp = client.post("/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    resp = client.post("/scan", json={"target": "example.com", "checks": ["headers"]})
     assert resp.status_code == 404
 
 
@@ -499,7 +499,7 @@ def test_check_web_cors_raw(client):
 
 def test_scan_with_web_check(client):
     """Web check can be included in a bundle scan."""
-    data = submit_scan(client, {"targets": ["example.com"], "checks": ["web"]})
+    data = submit_scan(client, {"target": "example.com", "checks": ["web"]})
 
     result = data["results"][0]
     assert "web" in result["results"]
@@ -508,7 +508,7 @@ def test_scan_with_web_check(client):
 
 def test_web_not_in_default_checks(client):
     """Web check should NOT be in default light checks (it's opt-in)."""
-    data = submit_scan(client, {"targets": ["example.com"]})
+    data = submit_scan(client, {"target": "example.com"})
     result = data["results"][0]
     assert "web" not in result["results"]
 
@@ -518,7 +518,7 @@ def test_web_not_in_default_checks(client):
 
 def test_scan_domain_works(client):
     """POST /v1/scan with a domain — auto-detect uses DOMAIN_CHECKS (includes dns)."""
-    data = submit_scan(client, {"targets": ["testphp.vulnweb.com"]})
+    data = submit_scan(client, {"target": "testphp.vulnweb.com"})
     result = data["results"][0]
     assert result["target"] == "testphp.vulnweb.com"
     # Default domain checks include dns
@@ -527,7 +527,7 @@ def test_scan_domain_works(client):
 
 def test_scan_ip_auto_detect_uses_ip_checks(client):
     """POST /v1/scan with an IP — auto-detect uses IP_CHECKS (no dns)."""
-    data = submit_scan(client, {"targets": ["44.228.249.3"]})
+    data = submit_scan(client, {"target": "44.228.249.3"})
     result = data["results"][0]
     assert result["target"] == "44.228.249.3"
     # IP default checks should NOT include dns
@@ -539,7 +539,7 @@ def test_scan_ip_auto_detect_uses_ip_checks(client):
 
 def test_scan_dns_check_rejected_for_ip_target(client):
     """POST /v1/scan with an IP target + explicit dns check — should return 422."""
-    resp = client.post("/v1/scan", json={"targets": ["44.228.249.3"], "checks": ["dns"]})
+    resp = client.post("/v1/scan", json={"target": "44.228.249.3", "checks": ["dns"]})
     assert resp.status_code == 422
     body = resp.json()
     assert "dns" in body["detail"].lower()
@@ -594,14 +594,14 @@ def test_check_ports_scanme(client):
 
 def test_ports_not_in_default_checks(client):
     """Ports check should NOT be in default checks (it's opt-in like web)."""
-    data = submit_scan(client, {"targets": ["example.com"]})
+    data = submit_scan(client, {"target": "example.com"})
     result = data["results"][0]
     assert "ports" not in result["results"]
 
 
 def test_ports_in_bundle_scan(client):
     """Ports check can be explicitly included in a bundle scan."""
-    data = submit_scan(client, {"targets": ["scanme.nmap.org"], "checks": ["ports"]})
+    data = submit_scan(client, {"target": "scanme.nmap.org", "checks": ["ports"]})
 
     result = data["results"][0]
     assert "ports" in result["results"]
@@ -689,7 +689,7 @@ def test_check_cve_findings_structure(client):
 
 def test_cve_in_bundle_scan(client):
     """CVE check can be explicitly included in a bundle scan."""
-    data = submit_scan(client, {"targets": ["scanme.nmap.org"], "checks": ["cve"]})
+    data = submit_scan(client, {"target": "scanme.nmap.org", "checks": ["cve"]})
 
     result = data["results"][0]
     assert "cve" in result["results"]
@@ -698,7 +698,7 @@ def test_cve_in_bundle_scan(client):
 
 def test_cve_not_in_default_checks(client):
     """CVE check should NOT be in default checks (it's opt-in like ports)."""
-    data = submit_scan(client, {"targets": ["example.com"]})
+    data = submit_scan(client, {"target": "example.com"})
     result = data["results"][0]
     assert "cve" not in result["results"]
 
@@ -741,7 +741,7 @@ def test_scan_whois_google(client):
 
 def test_scan_whois_in_default_domain_checks(client):
     """WHOIS should be included in the default domain scan bundle."""
-    data = submit_scan(client, {"targets": ["google.com"]})
+    data = submit_scan(client, {"target": "google.com"})
     result = data["results"][0]
     assert "whois" in result["results"], f"whois missing from default scan, got: {list(result['results'].keys())}"
 

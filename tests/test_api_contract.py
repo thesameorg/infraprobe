@@ -38,7 +38,7 @@ pytestmark = pytest.mark.integration
 class TestScanEndpoint:
     def test_scan_fast_checks_returns_200(self, client):
         """Fast-only checks → sync 200 with direct ScanResponse."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"]})
         assert resp.status_code == 200
         body = resp.json()
         assert "results" in body
@@ -46,7 +46,7 @@ class TestScanEndpoint:
 
     def test_scan_async_mode_forces_202(self, client):
         """async_mode=True → always 202 even for fast checks."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
         assert resp.status_code == 202
         body = resp.json()
         assert "job_id" in body
@@ -54,7 +54,7 @@ class TestScanEndpoint:
 
     def test_scan_without_checks_auto_detects(self, client):
         """Omitting checks → auto-detect based on target type (domain → DOMAIN_CHECKS)."""
-        result = submit_scan(client, {"targets": ["example.com"]})
+        result = submit_scan(client, {"target": "example.com"})
         target_result = result["results"][0]
         # Domain defaults include headers, ssl, dns, tech, blacklist, whois
         assert "headers" in target_result["results"]
@@ -62,7 +62,7 @@ class TestScanEndpoint:
 
     def test_scan_ip_auto_detects_ip_checks(self, client):
         """IP target → IP_CHECKS (no dns, no whois)."""
-        result = submit_scan(client, {"targets": ["93.184.216.34"]})
+        result = submit_scan(client, {"target": "93.184.216.34"})
         target_result = result["results"][0]
         assert "dns" not in target_result["results"]
         assert "whois" not in target_result["results"]
@@ -70,34 +70,26 @@ class TestScanEndpoint:
 
     def test_scan_dns_on_ip_rejected(self, client):
         """Explicit DNS check on IP → 422 invalid_target."""
-        resp = client.post("/v1/scan", json={"targets": ["93.184.216.34"], "checks": ["dns"]})
+        resp = client.post("/v1/scan", json={"target": "93.184.216.34", "checks": ["dns"]})
         assert resp.status_code == 422
         body = resp.json()
         assert body["error"] == "invalid_target"
         assert "dns" in body["detail"].lower()
 
     def test_scan_whois_on_ip_rejected(self, client):
-        resp = client.post("/v1/scan", json={"targets": ["93.184.216.34"], "checks": ["whois"]})
+        resp = client.post("/v1/scan", json={"target": "93.184.216.34", "checks": ["whois"]})
         assert resp.status_code == 422
 
-    def test_scan_multiple_targets(self, client):
-        """Scanning two targets returns results for both."""
-        result = submit_scan(client, {"targets": ["example.com", "google.com"], "checks": ["headers"]})
-        targets = {r["target"] for r in result["results"]}
-        assert "example.com" in targets
-        assert "google.com" in targets
-        assert len(result["results"]) == 2
-
-    def test_scan_empty_targets_422(self, client):
-        resp = client.post("/v1/scan", json={"targets": [], "checks": ["headers"]})
+    def test_scan_missing_target_422(self, client):
+        resp = client.post("/v1/scan", json={"checks": ["headers"]})
         assert resp.status_code == 422
 
     def test_scan_invalid_check_type_422(self, client):
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["nonexistent"]})
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["nonexistent"]})
         assert resp.status_code == 422
 
     def test_scan_blocked_target_400(self, client):
-        resp = client.post("/v1/scan", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
+        resp = client.post("/v1/scan", json={"target": "127.0.0.1", "checks": ["headers"]})
         assert resp.status_code == 400
         assert resp.json()["error"] == "blocked_target"
 
@@ -114,7 +106,7 @@ class TestGetScanJob:
         assert resp.json()["error"] == "not_found"
 
     def test_completed_job_has_result(self, client):
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
         assert resp.status_code == 202
         job = poll_until_done(client, resp.json()["job_id"])
         assert job["status"] == "completed"
@@ -131,7 +123,7 @@ class TestGetScanJob:
             status=JobStatus.RUNNING,
             created_at=now,
             updated_at=now,
-            request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+            request=ScanRequest(target="example.com", checks=[CheckType.HEADERS]),
         )
         resp = client.get("/v1/scan/running-contract")
         assert resp.status_code == 200
@@ -147,7 +139,7 @@ class TestGetScanJob:
             status=JobStatus.FAILED,
             created_at=now,
             updated_at=now,
-            request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+            request=ScanRequest(target="example.com", checks=[CheckType.HEADERS]),
             error="network timeout",
         )
         resp = client.get("/v1/scan/failed-contract")
@@ -238,7 +230,7 @@ class TestSummaryField:
 
     def test_scan_response_has_summary(self, client):
         """ScanResponse from bundle scan should include an aggregate summary."""
-        result = submit_scan(client, {"targets": ["example.com"], "checks": ["headers"]})
+        result = submit_scan(client, {"target": "example.com", "checks": ["headers"]})
         assert "summary" in result
         summary = result["summary"]
         assert summary["total"] >= 0
@@ -303,7 +295,7 @@ class TestFailOn:
             status=JobStatus.COMPLETED,
             created_at=now,
             updated_at=now,
-            request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+            request=ScanRequest(target="example.com", checks=[CheckType.HEADERS]),
             result=ScanResponse(results=[tr]),
         )
 
@@ -353,7 +345,7 @@ class TestFailOn:
             status=JobStatus.RUNNING,
             created_at=now,
             updated_at=now,
-            request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+            request=ScanRequest(target="example.com", checks=[CheckType.HEADERS]),
         )
         resp = client.get("/v1/scan/failon-pending?fail_on=high")
         assert resp.status_code == 200
@@ -369,11 +361,11 @@ class TestRemovedRoutes:
     """Old API routes that were removed should return 404."""
 
     def test_scan_domain_removed(self, client):
-        resp = client.post("/v1/scan_domain", json={"targets": ["example.com"]})
+        resp = client.post("/v1/scan_domain", json={"target": "example.com"})
         assert resp.status_code in (404, 405)
 
     def test_scan_ip_removed(self, client):
-        resp = client.post("/v1/scan_ip", json={"targets": ["93.184.216.34"]})
+        resp = client.post("/v1/scan_ip", json={"target": "93.184.216.34"})
         assert resp.status_code in (404, 405)
 
     def test_check_domain_removed(self, client):
@@ -389,7 +381,7 @@ class TestRemovedRoutes:
         assert resp.status_code in (404, 405)
 
     def test_scan_async_removed(self, client):
-        resp = client.post("/v1/scan/async", json={"targets": ["example.com"], "checks": ["headers"]})
+        resp = client.post("/v1/scan/async", json={"target": "example.com", "checks": ["headers"]})
         # /scan/async is now matched by /scan/{job_id} with job_id="async" → 404 from store
         # or it might match POST /scan and fail differently — either way, not the old 202 behavior
         assert resp.status_code != 202
@@ -399,7 +391,7 @@ class TestRemovedRoutes:
         assert resp.status_code == 404
 
     def test_unversioned_scan_removed(self, client):
-        resp = client.post("/scan", json={"targets": ["example.com"]})
+        resp = client.post("/scan", json={"target": "example.com"})
         assert resp.status_code == 404
 
 
@@ -435,7 +427,7 @@ class TestInternalEndpoints:
 class TestResponseStructure:
     def test_job_create_shape(self, client):
         """POST /v1/scan with async_mode → 202 response has exact JobCreate fields."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
         assert resp.status_code == 202
         body = resp.json()
         assert set(body.keys()) == {"job_id", "status", "created_at"}
@@ -443,7 +435,7 @@ class TestResponseStructure:
 
     def test_sync_scan_response_shape(self, client):
         """POST /v1/scan with fast checks → 200 with ScanResponse shape."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"]})
         assert resp.status_code == 200
         body = resp.json()
         assert "results" in body
@@ -452,7 +444,7 @@ class TestResponseStructure:
 
     def test_job_completed_shape(self, client):
         """Completed job has all Job fields."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
         job = poll_until_done(client, resp.json()["job_id"])
         expected_keys = {
             "job_id",

@@ -11,7 +11,7 @@ scan:
 	@test -n "$(TARGET)" || (echo "Usage: make scan TARGET=example.com" && exit 1)
 	curl -s http://localhost:8080/v1/scan \
 		-H 'Content-Type: application/json' \
-		-d '{"targets": ["$(TARGET)"]}' | python3 -m json.tool
+		-d '{"target": "$(TARGET)"}' | python3 -m json.tool
 
 # Verify deployed instance (reads URL + secret from .envs/)
 verify:

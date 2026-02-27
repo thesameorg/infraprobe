@@ -254,23 +254,21 @@ def _format_target_result(result: TargetResult, fmt: OutputFormat) -> TargetResu
     return result
 
 
-def _resolve_checks(targets: list[str], checks: list[CheckType] | None) -> list[CheckType]:
-    """Resolve checks list: auto-detect from target types if None, validate if explicit."""
+def _resolve_checks(target: str, checks: list[CheckType] | None) -> list[CheckType]:
+    """Resolve checks list: auto-detect from target type if None, validate if explicit."""
+    is_ip = parse_target(target).is_ip
     if checks is not None:
         # Validate: reject DNS-only checks on IP targets
-        ip_targets = [t for t in targets if parse_target(t).is_ip]
-        if ip_targets:
+        if is_ip:
             dns_only = set(checks) & DNS_ONLY_CHECKS
             if dns_only:
                 raise InvalidTargetError(
-                    f"DNS checks ({', '.join(sorted(str(c) for c in dns_only))}) "
-                    f"not applicable to IP targets: {', '.join(ip_targets)}"
+                    f"DNS checks ({', '.join(sorted(str(c) for c in dns_only))}) not applicable to IP target: {target}"
                 )
         return checks
 
-    # Auto-detect based on target types
-    has_ip = any(parse_target(t).is_ip for t in targets)
-    if has_ip:
+    # Auto-detect based on target type
+    if is_ip:
         return list(IP_CHECKS)
     return list(DOMAIN_CHECKS)
 
@@ -313,13 +311,13 @@ async def _run_scan_with_contexts(
 
 
 async def _run_scan_with_validator(
-    targets: list[str],
+    target: str,
     checks: list[CheckType],
     auth: AuthConfig | None = None,
 ) -> ScanResponse:
-    """Validate targets then run checks — used by async job path."""
-    contexts = await asyncio.gather(*[validate_target(raw) for raw in targets])
-    return await _run_scan_with_contexts(contexts, checks, auth)
+    """Validate target then run checks — used by async job path."""
+    ctx = await validate_target(target)
+    return await _run_scan_with_contexts([ctx], checks, auth)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +357,7 @@ async def _run_scan_job(
 ) -> None:
     try:
         await store.update_status(job_id, JobStatus.RUNNING)
-        result = await _run_scan_with_validator(request.targets, request.checks, request.auth)
+        result = await _run_scan_with_validator(request.target, request.checks, request.auth)
         await store.complete(job_id, result)
     except Exception as exc:
         logger.error(
@@ -396,7 +394,7 @@ async def _run_scan_job(
     tags=["Scans"],
     summary="Run security scan",
     description=(
-        "Submit a security scan for one or more targets. "
+        "Submit a security scan for a target. "
         "Fast checks (headers, ssl, dns, tech, blacklist, whois, web) return **200** with inline results. "
         "Slow checks (ssl_deep, cve) or `async_mode: true` return **202** with a job_id "
         "for polling via `GET /v1/scan/{job_id}`. "
@@ -408,11 +406,11 @@ async def scan(request: ScanRequest, req: Request) -> JSONResponse:
         return JSONResponse(status_code=503, content={"error": "shutting_down", "detail": "Server is shutting down"})
 
     # Resolve checks (auto-detect if None)
-    resolved_checks = _resolve_checks(request.targets, request.checks)
+    resolved_checks = _resolve_checks(request.target, request.checks)
     request = request.model_copy(update={"checks": resolved_checks})
 
-    # Validate all targets once — reuse contexts for sync path
-    contexts = await asyncio.gather(*[validate_target(raw) for raw in request.targets])
+    # Validate target once — reuse context for sync path
+    ctx = await validate_target(request.target)
 
     # Validate webhook URL (SSRF protection)
     webhook_url = request.webhook_url
@@ -445,7 +443,7 @@ async def scan(request: ScanRequest, req: Request) -> JSONResponse:
         )
 
     # SYNC path — 200 inline
-    result = await _run_scan_with_contexts(contexts, resolved_checks, request.auth)
+    result = await _run_scan_with_contexts([ctx], resolved_checks, request.auth)
     return JSONResponse(status_code=200, content=result.model_dump(mode="json"))
 
 
@@ -571,7 +569,7 @@ def _make_slow_check_handler(ct: CheckType):
             raise InvalidTargetError(f"Check type {ct} not applicable to IP targets")
 
         # Create a ScanRequest wrapping the single check
-        scan_req = ScanRequest(targets=[request.target], checks=[ct], auth=request.auth)
+        scan_req = ScanRequest(target=request.target, checks=[ct], auth=request.auth)
 
         store: JobStore = req.app.state.job_store
         job_id = uuid.uuid4().hex

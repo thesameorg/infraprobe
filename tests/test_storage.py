@@ -13,7 +13,7 @@ def store():
 
 @pytest.fixture
 def scan_request():
-    return ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS])
+    return ScanRequest(target="example.com", checks=[CheckType.HEADERS])
 
 
 async def test_create_and_get(store: MemoryJobStore, scan_request: ScanRequest):

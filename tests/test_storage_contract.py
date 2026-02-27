@@ -15,7 +15,7 @@ from infraprobe.storage.memory import MemoryJobStore
 
 
 def _make_request() -> ScanRequest:
-    return ScanRequest(targets=["example.com"], checks=["headers"])
+    return ScanRequest(target="example.com", checks=["headers"])
 
 
 def _make_response() -> ScanResponse:
@@ -117,7 +117,7 @@ class TestJobStoreContract:
             await store.create("job-1", request)
 
             job = await store.get("job-1")
-            assert job.request.targets == ["example.com"]
+            assert job.request.target == "example.com"
             assert job.request.checks == request.checks
 
         asyncio.get_event_loop().run_until_complete(_test())

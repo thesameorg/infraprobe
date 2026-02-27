@@ -101,8 +101,10 @@ async def build_context(raw: str) -> ScanContext:
     loop = asyncio.get_running_loop()
     try:
         infos = await loop.getaddrinfo(target.host, target.port or 443, proto=socket.IPPROTO_TCP)
+    except UnicodeError as exc:
+        raise InvalidTargetError(f"Invalid domain format: {target.host} ({exc})") from exc
     except socket.gaierror as exc:
-        raise InvalidTargetError(f"Cannot resolve {target.host}: {exc}") from exc
+        raise InvalidTargetError(f"Cannot resolve domain: {target.host} (does it exist?)") from exc
 
     seen: set[str] = set()
     resolved: list[str] = []

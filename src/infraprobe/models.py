@@ -119,27 +119,53 @@ AuthConfig = Annotated[
 class SingleCheckRequest(BaseModel):
     model_config = ConfigDict(json_schema_extra={"examples": [{"target": "example.com"}]})
 
-    target: TargetStr
-    auth: AuthConfig | None = Field(default=None, exclude=True)
+    target: TargetStr = Field(
+        description="Domain name, IP address, or host:port to scan (e.g. 'example.com', '93.184.216.34')."
+    )
+    auth: AuthConfig | None = Field(
+        default=None,
+        exclude=True,
+        description="Credentials to send to the scan target (header, basic, bearer, or cookie auth).",
+    )
 
 
 class ScanRequest(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "examples": [
-                {"targets": ["example.com"], "checks": ["headers", "ssl", "dns"]},
-                {"targets": ["example.com", "google.com"]},
-                {"targets": ["example.com"], "checks": ["cve"], "async_mode": True},
+                {"target": "example.com", "checks": ["headers", "ssl", "dns"]},
+                {"target": "example.com"},
+                {"target": "example.com", "checks": ["cve"], "async_mode": True},
             ]
         }
     )
 
-    targets: list[TargetStr] = Field(min_length=1, max_length=10)
-    checks: list[CheckType] | None = None  # None = auto-detect based on target type
-    async_mode: bool = False  # Force 202 async even for sync-eligible checks
-    webhook_url: Annotated[str, Field(max_length=2048)] | None = None
-    webhook_secret: str | None = Field(default=None, exclude=True)
-    auth: AuthConfig | None = Field(default=None, exclude=True)
+    target: TargetStr = Field(
+        description=(
+            "Domain name, IP address, or host:port to scan (e.g. 'example.com', '93.184.216.34', 'example.com:8443')."
+        ),
+    )
+    checks: list[CheckType] | None = Field(
+        default=None,
+        description=(
+            "Check types to run. When omitted, auto-detects based on target type:"
+            " domains get headers/ssl/dns/tech/blacklist/whois; IPs get headers/ssl/tech/blacklist."
+        ),
+    )
+    async_mode: bool = Field(default=False, description="Force async (202) response even for fast checks.")
+    webhook_url: Annotated[str, Field(max_length=2048)] | None = Field(
+        default=None, description="URL to POST results to when scan completes. Providing this forces async mode."
+    )
+    webhook_secret: str | None = Field(
+        default=None,
+        exclude=True,
+        description="HMAC-SHA256 key for signing webhook payloads (sent in X-InfraProbe-Signature header).",
+    )
+    auth: AuthConfig | None = Field(
+        default=None,
+        exclude=True,
+        description="Credentials to send to the scan target (header, basic, bearer, or cookie auth).",
+    )
 
 
 _SCORE_PENALTY: dict[str, int] = {

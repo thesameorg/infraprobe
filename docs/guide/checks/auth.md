@@ -10,7 +10,7 @@ InfraProbe can scan targets that sit behind authentication. Pass credentials via
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{
-    "targets": ["api.staging.example.com"],
+    "target": "api.staging.example.com",
     "checks": ["headers", "tech", "web"],
     "auth": {"type": "bearer", "token": "eyJhbGciOi..."}
   }'
@@ -35,7 +35,7 @@ Covers API keys, custom auth schemes, or any header-based auth.
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{
-    "targets": ["api.example.com"],
+    "target": "api.example.com",
     "auth": {"type": "header", "headers": {"X-API-Key": "sk-live-abc123"}}
   }'
 ```
@@ -50,7 +50,7 @@ Pass session cookies extracted from browser DevTools.
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{
-    "targets": ["app.example.com"],
+    "target": "app.example.com",
     "checks": ["headers", "web"],
     "auth": {"type": "cookie", "cookies": {"session_id": "abc123"}}
   }'

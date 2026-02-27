@@ -16,8 +16,7 @@ TEST_DOMAIN = "example.com"
 TEST_IP = "93.184.216.34"  # example.com
 
 # All check types (fast inline + slow async)
-FAST_CHECKS = ["ssl", "headers", "dns", "tech", "blacklist", "web", "whois",
-               "dns_deep", "blacklist_deep", "ports"]
+FAST_CHECKS = ["ssl", "headers", "dns", "tech", "blacklist", "web", "whois", "dns_deep", "blacklist_deep", "ports"]
 SLOW_CHECKS = ["ssl_deep", "cve"]
 DOMAIN_ONLY_CHECKS = {"dns", "dns_deep", "whois"}
 
@@ -191,7 +190,7 @@ def probe_slow_checks(client: httpx.Client, stats: Stats) -> None:
 def probe_bundle_scan(client: httpx.Client, stats: Stats) -> None:
     """POST /v1/scan always returns 202 (async). Submit, then poll for results."""
     print(section("Bundle scan (POST /v1/scan → 202 → poll)"))
-    resp = client.post("/v1/scan", json={"targets": [TEST_DOMAIN], "checks": ["headers", "ssl", "dns"]})
+    resp = client.post("/v1/scan", json={"target": TEST_DOMAIN, "checks": ["headers", "ssl", "dns"]})
     body = check_response(stats, "POST /v1/scan", resp, expected_status=202, must_have_keys=["job_id", "status"])
     if not body:
         return
@@ -212,9 +211,10 @@ def probe_target_auto_detect(client: httpx.Client, stats: Stats) -> None:
     print(section("Target auto-detection"))
 
     # IP target with auto-detect defaults — should exclude DNS/WHOIS
-    resp = client.post("/v1/scan", json={"targets": [TEST_IP]})
-    body = check_response(stats, "POST /v1/scan (IP, auto-detect)", resp, expected_status=202,
-                          must_have_keys=["job_id"])
+    resp = client.post("/v1/scan", json={"target": TEST_IP})
+    body = check_response(
+        stats, "POST /v1/scan (IP, auto-detect)", resp, expected_status=202, must_have_keys=["job_id"]
+    )
     if body:
         job = poll_job(client, stats, body["job_id"], "IP auto-detect scan")
         if job and job.get("result"):
@@ -225,7 +225,7 @@ def probe_target_auto_detect(client: httpx.Client, stats: Stats) -> None:
                 stats.record_fail(f"IP auto-detect should exclude DNS/WHOIS, got: {result_keys}")
 
     # DNS check on IP target — should be rejected
-    resp = client.post("/v1/scan", json={"targets": [TEST_IP], "checks": ["dns"]})
+    resp = client.post("/v1/scan", json={"target": TEST_IP, "checks": ["dns"]})
     if resp.status_code == 422:
         stats.record_pass(f"POST /v1/scan (DNS on IP rejected) [{resp.status_code}]")
     else:
@@ -255,14 +255,16 @@ def probe_output_formats(client: httpx.Client, stats: Stats) -> None:
     # CSV on inline check
     resp = client.post("/v1/check/headers?format=csv", json={"target": TEST_DOMAIN})
     if resp.status_code == 200 and ("target" in resp.text or "severity" in resp.text):
-        stats.record_pass(f"POST /v1/check/headers?format=csv [{resp.status_code}] ({resp.elapsed.total_seconds():.1f}s)")
+        stats.record_pass(
+            f"POST /v1/check/headers?format=csv [{resp.status_code}] ({resp.elapsed.total_seconds():.1f}s)"
+        )
     elif resp.status_code == 200:
         stats.record_warn(f"POST /v1/check/headers?format=csv [{resp.status_code}] — unexpected body")
     else:
         stats.record_fail(f"POST /v1/check/headers?format=csv [{resp.status_code}]")
 
     # SARIF on poll endpoint
-    resp = client.post("/v1/scan", json={"targets": [TEST_DOMAIN], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"target": TEST_DOMAIN, "checks": ["headers"]})
     if resp.status_code == 202:
         job_id = resp.json()["job_id"]
         job = poll_job(client, stats, job_id, "Format test scan")
@@ -392,7 +394,9 @@ def main() -> None:
 
     elapsed = time.monotonic() - t0
     print(section("Summary"))
-    print(f"  {GREEN}{stats.passed} passed{RESET}  {RED}{stats.failed} failed{RESET}  {YELLOW}{stats.warned} warnings{RESET}  ({elapsed:.0f}s)")
+    print(
+        f"  {GREEN}{stats.passed} passed{RESET}  {RED}{stats.failed} failed{RESET}  {YELLOW}{stats.warned} warnings{RESET}  ({elapsed:.0f}s)"
+    )
 
     sys.exit(1 if stats.failed else 0)
 

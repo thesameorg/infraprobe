@@ -74,7 +74,7 @@ async def store():
 
 
 def _scan_request(checks=None):
-    return ScanRequest(targets=["example.com"], checks=checks or [CheckType.HEADERS])
+    return ScanRequest(target="example.com", checks=checks or [CheckType.HEADERS])
 
 
 def _scan_response():
@@ -89,13 +89,13 @@ class TestFirestoreJobStoreCRUD:
         job = await store.create("job-1", _scan_request())
         assert job.job_id == "job-1"
         assert job.status == JobStatus.PENDING
-        assert job.request.targets == ["example.com"]
+        assert job.request.target == "example.com"
 
         fetched = await store.get("job-1")
         assert fetched is not None
         assert fetched.job_id == "job-1"
         assert fetched.status == JobStatus.PENDING
-        assert fetched.request.targets == ["example.com"]
+        assert fetched.request.target == "example.com"
 
     async def test_get_nonexistent_returns_none(self, store):
         result = await store.get("nonexistent")

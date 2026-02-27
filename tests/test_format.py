@@ -179,7 +179,7 @@ class TestFormatQueryParam:
 
     def test_default_format_is_json(self, client):
         """POST /v1/scan returns 202; poll result is JSON by default."""
-        result = submit_scan(client, {"targets": ["example.com"], "checks": ["headers"]})
+        result = submit_scan(client, {"target": "example.com", "checks": ["headers"]})
         # submit_scan returns the ScanResponse dict from the completed job
         assert "results" in result
 
@@ -191,9 +191,7 @@ class TestFormatQueryParam:
 
     def test_sarif_format_on_scan(self, client):
         """Submit scan (async), poll until done, then GET /v1/scan/{job_id}?format=sarif."""
-        resp = client.post(
-            "/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True}
-        )
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
         assert resp.status_code == 202
         job_id = resp.json()["job_id"]
         poll_until_done(client, job_id)
@@ -242,7 +240,7 @@ class TestFormatQueryParam:
 
     def test_error_responses_stay_json(self, client):
         """Error responses (blocked target) should always be JSON, not SARIF."""
-        resp = client.post("/v1/scan?format=sarif", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
+        resp = client.post("/v1/scan?format=sarif", json={"target": "127.0.0.1", "checks": ["headers"]})
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("application/json")
         assert "detail" in resp.json()
@@ -349,9 +347,7 @@ class TestCsvFormatQueryParam:
 
     def test_csv_format_on_scan(self, client):
         """Submit scan (async), poll until done, then GET /v1/scan/{job_id}?format=csv."""
-        resp = client.post(
-            "/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True}
-        )
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers"], "async_mode": True})
         assert resp.status_code == 202
         job_id = resp.json()["job_id"]
         poll_until_done(client, job_id)
@@ -379,7 +375,7 @@ class TestCsvFormatQueryParam:
 
     def test_csv_error_responses_stay_json(self, client):
         """Error responses (blocked target) should always be JSON, not CSV."""
-        resp = client.post("/v1/scan?format=csv", json={"targets": ["127.0.0.1"], "checks": ["headers"]})
+        resp = client.post("/v1/scan?format=csv", json={"target": "127.0.0.1", "checks": ["headers"]})
         assert resp.status_code == 400
         assert resp.headers["content-type"].startswith("application/json")
         assert "detail" in resp.json()
@@ -399,7 +395,7 @@ def _completed_job(job_id: str = "test-job") -> Job:
         status=JobStatus.COMPLETED,
         created_at=now,
         updated_at=now,
-        request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+        request=ScanRequest(target="example.com", checks=[CheckType.HEADERS]),
         result=ScanResponse(results=[tr]),
     )
 
@@ -420,7 +416,7 @@ class TestGetScanReport:
             status=JobStatus.RUNNING,
             created_at=now,
             updated_at=now,
-            request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+            request=ScanRequest(target="example.com", checks=[CheckType.HEADERS]),
         )
         resp = client.get("/v1/scan/pending-job")
         assert resp.status_code == 200
@@ -477,7 +473,7 @@ class TestGetScanReport:
             status=JobStatus.FAILED,
             created_at=now,
             updated_at=now,
-            request=ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS]),
+            request=ScanRequest(target="example.com", checks=[CheckType.HEADERS]),
             error="Something broke",
         )
         resp = client.get("/v1/scan/failed-job")

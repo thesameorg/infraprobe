@@ -250,14 +250,22 @@ async def _probe_path(base_url: str, probe: _PathProbe, client: httpx.AsyncClien
     if resp.status_code != 200:
         return None
 
+    # Reject HTML responses — SPA catch-all pages return 200 with HTML for any path,
+    # causing false positives when the HTML happens to contain trigger keywords.
+    content_type = resp.headers.get("content-type", "")
+    if "text/html" in content_type:
+        return None
+    try:
+        body = resp.text[:8192]
+    except Exception:
+        return None
+    body_stripped = body.lstrip()
+    if body_stripped[:9].lower().startswith("<!doctype") or body_stripped[:5].lower().startswith("<html"):
+        return None
+
     # Content check to filter out custom 404 pages that return 200
-    if probe.content_check is not None:
-        try:
-            body = resp.text[:8192]
-        except Exception:
-            return None
-        if not probe.content_check(body):
-            return None
+    if probe.content_check is not None and not probe.content_check(body):
+        return None
 
     return Finding(
         severity=probe.severity,

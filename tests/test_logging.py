@@ -162,7 +162,7 @@ def test_blocked_target_logged(client, caplog):
 def test_scan_bundle_logs(client, caplog):
     """Bundle scan should log scan started, finished per check, target done, scan done."""
     with caplog.at_level(logging.INFO, logger="infraprobe"):
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers", "ssl"]})
+        resp = client.post("/v1/scan", json={"target": "example.com", "checks": ["headers", "ssl"]})
         assert resp.status_code == 200  # fast checks → sync
 
     messages = [r.message for r in caplog.records]

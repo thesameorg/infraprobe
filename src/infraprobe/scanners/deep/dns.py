@@ -257,7 +257,15 @@ async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
     findings: list[Finding] = []
     raw: dict = {}
 
-    _analyze_results(data, findings, raw)
-    _add_positive_findings(findings, raw)
+    try:
+        _analyze_results(data, findings, raw)
+        _add_positive_findings(findings, raw)
+    except Exception as exc:
+        return CheckResult(
+            check=CheckType.DNS_DEEP,
+            findings=findings,
+            raw=raw,
+            error=f"Partial results — analysis failed: {exc}",
+        )
 
     return CheckResult(check=CheckType.DNS_DEEP, findings=findings, raw=raw)

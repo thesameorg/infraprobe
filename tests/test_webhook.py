@@ -32,7 +32,7 @@ def test_webhook_delivered_on_scan_complete(client: TestClient, httpserver: HTTP
 
     resp = client.post(
         "/v1/scan",
-        json={"targets": ["example.com"], "checks": ["headers"], "webhook_url": webhook_url},
+        json={"target": "example.com", "checks": ["headers"], "webhook_url": webhook_url},
     )
     assert resp.status_code == 202
     job_id = resp.json()["job_id"]
@@ -63,7 +63,7 @@ def test_webhook_includes_hmac_signature(client: TestClient, httpserver: HTTPSer
     resp = client.post(
         "/v1/scan",
         json={
-            "targets": ["example.com"],
+            "target": "example.com",
             "checks": ["headers"],
             "webhook_url": webhook_url,
             "webhook_secret": secret,
@@ -90,7 +90,7 @@ def test_webhook_invalid_url_returns_422(client: TestClient):
     # Private IP webhook should be rejected (SSRF protection)
     resp = client.post(
         "/v1/scan",
-        json={"targets": ["example.com"], "checks": ["headers"], "webhook_url": "http://10.0.0.1/hook"},
+        json={"target": "example.com", "checks": ["headers"], "webhook_url": "http://10.0.0.1/hook"},
     )
     assert resp.status_code == 422
 
@@ -103,7 +103,7 @@ def test_webhook_status_tracked_on_job(client: TestClient, httpserver: HTTPServe
 
     resp = client.post(
         "/v1/scan",
-        json={"targets": ["example.com"], "checks": ["headers"], "webhook_url": webhook_url},
+        json={"target": "example.com", "checks": ["headers"], "webhook_url": webhook_url},
     )
     assert resp.status_code == 202
     job_id = resp.json()["job_id"]
@@ -121,7 +121,7 @@ def test_webhook_status_tracked_on_job(client: TestClient, httpserver: HTTPServe
 def test_no_webhook_when_url_not_provided(client: TestClient):
     resp = client.post(
         "/v1/scan",
-        json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True},
+        json={"target": "example.com", "checks": ["headers"], "async_mode": True},
     )
     assert resp.status_code == 202
     job_id = resp.json()["job_id"]
@@ -140,7 +140,7 @@ def test_webhook_secret_not_in_job_response(client: TestClient, httpserver: HTTP
     resp = client.post(
         "/v1/scan",
         json={
-            "targets": ["example.com"],
+            "target": "example.com",
             "checks": ["headers"],
             "webhook_url": webhook_url,
             "webhook_secret": "super-secret",

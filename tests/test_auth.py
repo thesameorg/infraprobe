@@ -126,11 +126,11 @@ class TestAuthConfigDiscriminator:
         assert req.auth is None
 
     def test_auth_on_scan_request(self):
-        req = ScanRequest(targets=["example.com"], auth={"type": "bearer", "token": "tok"})
+        req = ScanRequest(target="example.com", auth={"type": "bearer", "token": "tok"})
         assert isinstance(req.auth, BearerAuth)
 
     def test_auth_on_scan_request_with_checks(self):
-        req = ScanRequest(targets=["example.com"], checks=["headers"], auth={"type": "bearer", "token": "tok"})
+        req = ScanRequest(target="example.com", checks=["headers"], auth={"type": "bearer", "token": "tok"})
         assert isinstance(req.auth, BearerAuth)
 
 
@@ -146,17 +146,17 @@ class TestAuthExclude:
         assert "auth" not in dumped
 
     def test_scan_request_excludes_auth(self):
-        req = ScanRequest(targets=["example.com"], auth={"type": "basic", "username": "u", "password": "p"})
+        req = ScanRequest(target="example.com", auth={"type": "basic", "username": "u", "password": "p"})
         dumped = req.model_dump()
         assert "auth" not in dumped
 
     def test_scan_request_with_checks_excludes_auth(self):
-        req = ScanRequest(targets=["example.com"], checks=["headers"], auth={"type": "bearer", "token": "tok"})
+        req = ScanRequest(target="example.com", checks=["headers"], auth={"type": "bearer", "token": "tok"})
         dumped = req.model_dump()
         assert "auth" not in dumped
 
     def test_scan_request_json_excludes_auth(self):
-        req = ScanRequest(targets=["example.com"], auth={"type": "bearer", "token": "secret"})
+        req = ScanRequest(target="example.com", auth={"type": "bearer", "token": "secret"})
         json_str = req.model_dump_json()
         assert "secret" not in json_str
         assert "auth" not in json_str
@@ -256,7 +256,7 @@ class TestAuthAPI:
         resp = client.post(
             "/v1/scan",
             json={
-                "targets": ["example.com"],
+                "target": "example.com",
                 "checks": ["dns"],
                 "auth": {"type": "bearer", "token": "test-token"},
             },
@@ -280,7 +280,7 @@ class TestAuthAPI:
         """Existing behavior — no auth field, still works."""
         resp = client.post(
             "/v1/scan",
-            json={"targets": ["example.com"], "checks": ["dns"]},
+            json={"target": "example.com", "checks": ["dns"]},
         )
         assert resp.status_code == 200  # fast check → sync
 
@@ -300,7 +300,7 @@ class TestAuthAPI:
         resp = client.post(
             "/v1/scan",
             json={
-                "targets": ["example.com"],
+                "target": "example.com",
                 "checks": ["dns"],
                 "auth": {"type": "bearer", "token": "super-secret-token"},
                 "async_mode": True,
@@ -325,7 +325,7 @@ class TestAuthAPI:
         resp = client.post(
             "/v1/scan",
             json={
-                "targets": ["example.com"],
+                "target": "example.com",
                 "checks": ["dns"],
                 "auth": {"type": "bearer", "token": "tok"},
             },

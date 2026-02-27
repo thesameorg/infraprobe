@@ -27,7 +27,7 @@ def store() -> MemoryJobStore:
 
 
 def _scan_request() -> ScanRequest:
-    return ScanRequest(targets=["example.com"], checks=[CheckType.HEADERS])
+    return ScanRequest(target="example.com", checks=[CheckType.HEADERS])
 
 
 def _scan_response() -> ScanResponse:

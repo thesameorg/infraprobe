@@ -6,28 +6,23 @@ All endpoints are under the `/v1` prefix.
 
 ### Bundle Scan
 
-Scan one or more targets with multiple checks at once. Fast checks return `200` with inline results; slow checks (ssl_deep, cve) or `async_mode: true` return `202` with a job ID for polling.
+Scan a target with multiple checks at once. Fast checks return `200` with inline results; slow checks (ssl_deep, cve) or `async_mode: true` return `202` with a job ID for polling.
 
 ```bash
 # Scan a domain with default checks — returns 200 with results inline
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"]}'
+  -d '{"target": "example.com"}'
 
 # Scan with specific checks
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"], "checks": ["headers", "ssl", "dns"]}'
+  -d '{"target": "example.com", "checks": ["headers", "ssl", "dns"]}'
 
 # Force async mode (returns 202 + job_id)
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com"], "async_mode": true}'
-
-# Scan multiple targets
-curl -X POST https://your-instance/v1/scan \
-  -H "Content-Type: application/json" \
-  -d '{"targets": ["example.com", "example.org"]}'
+  -d '{"target": "example.com", "async_mode": true}'
 ```
 
 Sync response (`200 OK` — fast checks):
@@ -53,12 +48,12 @@ Async response (`202 Accepted` — slow checks or async_mode):
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `targets` | string[] | Yes | 1-10 domains or IPs |
+| `target` | string | Yes | Domain, IP address, or host:port to scan |
 | `checks` | string[] | No | Check types to run (auto-detected from target type if omitted) |
 | `async_mode` | bool | No | Force 202 async even for fast checks (default: false) |
-| `auth` | object | No | [Auth credentials](checks/auth.md) to send to scan targets |
+| `auth` | object | No | [Auth credentials](checks/auth.md) to send to scan target |
 | `webhook_url` | string | No | URL to receive results when scan completes (forces async) |
-| `webhook_secret` | string | No | HMAC-SHA256 key for signing webhook payloads |
+| `webhook_secret` | string | No | HMAC-SHA256 key for signing webhook payloads (sent in `X-InfraProbe-Signature` header) |
 
 **Auto-detection:** When `checks` is omitted, InfraProbe selects defaults based on target type:
 - **Domains:** headers, ssl, dns, tech, blacklist, whois
@@ -214,13 +209,13 @@ Instead of polling, provide a `webhook_url` to get results pushed to you:
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{
-    "targets": ["example.com"],
+    "target": "example.com",
     "webhook_url": "https://your-server/callback",
     "webhook_secret": "your-secret-key"
   }'
 ```
 
-When the scan completes, InfraProbe sends a POST request to your webhook URL with the scan results as the body. If you provide a `webhook_secret`, the payload is signed with HMAC-SHA256 in the `X-Signature` header for verification.
+When the scan completes, InfraProbe sends a POST request to your webhook URL with the scan results as the body. If you provide a `webhook_secret`, the payload is signed with HMAC-SHA256 in the `X-InfraProbe-Signature` header for verification.
 
 ## Authentication
 
@@ -230,7 +225,7 @@ If your InfraProbe instance is configured with a RapidAPI proxy secret, include 
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -H "x-rapidapi-proxy-secret: your-secret" \
-  -d '{"targets": ["example.com"]}'
+  -d '{"target": "example.com"}'
 ```
 
 Requests without a valid secret receive `403 Forbidden`.
