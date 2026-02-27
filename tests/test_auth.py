@@ -261,9 +261,9 @@ class TestAuthAPI:
                 "auth": {"type": "bearer", "token": "test-token"},
             },
         )
-        assert resp.status_code == 202
+        assert resp.status_code == 200  # fast check → sync
         # Auth should not appear in response
-        assert "auth" not in resp.text or '"auth"' not in resp.text
+        assert "test-token" not in resp.text
 
     def test_single_check_accepts_auth_field(self, client):
         """POST /v1/check/dns with auth field works (DNS ignores auth)."""
@@ -282,7 +282,7 @@ class TestAuthAPI:
             "/v1/scan",
             json={"targets": ["example.com"], "checks": ["dns"]},
         )
-        assert resp.status_code == 202
+        assert resp.status_code == 200  # fast check → sync
 
     def test_invalid_auth_type_rejected(self, client):
         """Invalid auth type returns 422."""
@@ -303,6 +303,7 @@ class TestAuthAPI:
                 "targets": ["example.com"],
                 "checks": ["dns"],
                 "auth": {"type": "bearer", "token": "super-secret-token"},
+                "async_mode": True,
             },
         )
         assert resp.status_code == 202
@@ -329,7 +330,7 @@ class TestAuthAPI:
                 "auth": {"type": "bearer", "token": "tok"},
             },
         )
-        assert resp.status_code == 202
+        assert resp.status_code == 200  # fast check → sync
 
     def test_check_domain_accepts_auth(self, client):
         resp = client.post(

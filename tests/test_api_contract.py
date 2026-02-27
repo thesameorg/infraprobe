@@ -1,7 +1,7 @@
-"""API contract tests for the simplified InfraProbe v1 API surface.
+"""API contract tests for the InfraProbe v1 API surface.
 
 Verifies:
-- POST /v1/scan always returns 202 (async)
+- POST /v1/scan returns 200 (sync for fast checks) or 202 (async for slow/forced)
 - GET /v1/scan/{job_id} returns poll + results + format + fail_on
 - POST /v1/check/{type} returns 200 (fast) or 202 (slow)
 - Summary field computed correctly
@@ -31,38 +31,42 @@ pytestmark = pytest.mark.integration
 
 
 # ---------------------------------------------------------------------------
-# POST /v1/scan — always 202
+# POST /v1/scan — sync (200) for fast checks, async (202) for slow/forced
 # ---------------------------------------------------------------------------
 
 
 class TestScanEndpoint:
-    def test_scan_returns_202(self, client):
+    def test_scan_fast_checks_returns_200(self, client):
+        """Fast-only checks → sync 200 with direct ScanResponse."""
         resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "results" in body
+        assert "summary" in body
+
+    def test_scan_async_mode_forces_202(self, client):
+        """async_mode=True → always 202 even for fast checks."""
+        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
         assert resp.status_code == 202
         body = resp.json()
         assert "job_id" in body
         assert body["status"] == "pending"
-        assert "created_at" in body
 
     def test_scan_without_checks_auto_detects(self, client):
         """Omitting checks → auto-detect based on target type (domain → DOMAIN_CHECKS)."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"]})
-        assert resp.status_code == 202
-        job = poll_until_done(client, resp.json()["job_id"])
-        result = job["result"]["results"][0]
+        result = submit_scan(client, {"targets": ["example.com"]})
+        target_result = result["results"][0]
         # Domain defaults include headers, ssl, dns, tech, blacklist, whois
-        assert "headers" in result["results"]
-        assert "dns" in result["results"]
+        assert "headers" in target_result["results"]
+        assert "dns" in target_result["results"]
 
     def test_scan_ip_auto_detects_ip_checks(self, client):
         """IP target → IP_CHECKS (no dns, no whois)."""
-        resp = client.post("/v1/scan", json={"targets": ["93.184.216.34"]})
-        assert resp.status_code == 202
-        job = poll_until_done(client, resp.json()["job_id"])
-        result = job["result"]["results"][0]
-        assert "dns" not in result["results"]
-        assert "whois" not in result["results"]
-        assert "headers" in result["results"]
+        result = submit_scan(client, {"targets": ["93.184.216.34"]})
+        target_result = result["results"][0]
+        assert "dns" not in target_result["results"]
+        assert "whois" not in target_result["results"]
+        assert "headers" in target_result["results"]
 
     def test_scan_dns_on_ip_rejected(self, client):
         """Explicit DNS check on IP → 422 invalid_target."""
@@ -110,7 +114,8 @@ class TestGetScanJob:
         assert resp.json()["error"] == "not_found"
 
     def test_completed_job_has_result(self, client):
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
+        assert resp.status_code == 202
         job = poll_until_done(client, resp.json()["job_id"])
         assert job["status"] == "completed"
         assert job["result"] is not None
@@ -177,21 +182,16 @@ class TestCheckEndpoint:
         assert resp.status_code == 200
         assert "dns" in resp.json()["results"]
 
-    def test_slow_check_ports_returns_202(self, client):
-        """Ports check is slow → returns 202 with job_id."""
+    def test_ports_check_returns_200(self, client):
+        """Ports check is sync (nmap top-20 is fast enough)."""
         resp = client.post("/v1/check/ports", json={"target": "scanme.nmap.org"})
-        assert resp.status_code == 202
-        body = resp.json()
-        assert "job_id" in body
-        assert body["status"] == "pending"
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "ports" in data["results"]
 
-    def test_slow_check_cve_returns_202(self, client):
+    def test_async_check_cve_returns_202(self, client):
+        """CVE check is async → returns 202 with job_id."""
         resp = client.post("/v1/check/cve", json={"target": "scanme.nmap.org"})
-        assert resp.status_code == 202
-        assert "job_id" in resp.json()
-
-    def test_slow_check_ports_deep_returns_202(self, client):
-        resp = client.post("/v1/check/ports_deep", json={"target": "scanme.nmap.org"})
         assert resp.status_code == 202
         assert "job_id" in resp.json()
 
@@ -434,16 +434,25 @@ class TestInternalEndpoints:
 
 class TestResponseStructure:
     def test_job_create_shape(self, client):
-        """POST /v1/scan → 202 response has exact JobCreate fields."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        """POST /v1/scan with async_mode → 202 response has exact JobCreate fields."""
+        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
         assert resp.status_code == 202
         body = resp.json()
         assert set(body.keys()) == {"job_id", "status", "created_at"}
         assert body["status"] == "pending"
 
+    def test_sync_scan_response_shape(self, client):
+        """POST /v1/scan with fast checks → 200 with ScanResponse shape."""
+        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert "results" in body
+        assert "summary" in body
+        assert len(body["results"]) == 1
+
     def test_job_completed_shape(self, client):
         """Completed job has all Job fields."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
         job = poll_until_done(client, resp.json()["job_id"])
         expected_keys = {
             "job_id",
@@ -465,15 +474,21 @@ class TestResponseStructure:
         """Inline check returns TargetResult with expected fields."""
         resp = client.post("/v1/check/headers", json={"target": "example.com"})
         data = resp.json()
-        expected_keys = {"target", "results", "duration_ms", "summary"}
-        assert set(data.keys()) == expected_keys
+        assert "target" in data
+        assert "results" in data
+        assert "duration_ms" in data
+        assert "summary" in data
 
     def test_check_result_shape(self, client):
-        """Each CheckResult in results has check, findings, raw, error."""
+        """Each CheckResult in results has check, findings, raw, error, timing."""
         resp = client.post("/v1/check/headers", json={"target": "example.com"})
         cr = resp.json()["results"]["headers"]
-        expected_keys = {"check", "findings", "raw", "error"}
-        assert set(cr.keys()) == expected_keys
+        assert "check" in cr
+        assert "findings" in cr
+        assert "raw" in cr
+        assert "error" in cr
+        assert "duration_ms" in cr
+        assert "timeout_ms" in cr
 
     def test_finding_shape(self, client):
         """Each Finding has severity, title, description, details."""

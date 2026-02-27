@@ -4,12 +4,12 @@
 
 All endpoints are under the `/v1` prefix.
 
-### Bundle Scan (always async)
+### Bundle Scan
 
-Scan one or more targets with multiple checks at once. Always returns `202 Accepted` with a job ID — poll for results.
+Scan one or more targets with multiple checks at once. Fast checks return `200` with inline results; slow checks (ssl_deep, cve) or `async_mode: true` return `202` with a job ID for polling.
 
 ```bash
-# Scan a domain with default checks (auto-detected based on target type)
+# Scan a domain with default checks — returns 200 with results inline
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{"targets": ["example.com"]}'
@@ -19,13 +19,27 @@ curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{"targets": ["example.com"], "checks": ["headers", "ssl", "dns"]}'
 
+# Force async mode (returns 202 + job_id)
+curl -X POST https://your-instance/v1/scan \
+  -H "Content-Type: application/json" \
+  -d '{"targets": ["example.com"], "async_mode": true}'
+
 # Scan multiple targets
 curl -X POST https://your-instance/v1/scan \
   -H "Content-Type: application/json" \
   -d '{"targets": ["example.com", "example.org"]}'
 ```
 
-Response (`202 Accepted`):
+Sync response (`200 OK` — fast checks):
+
+```json
+{
+  "results": [{"target": "example.com", "results": {...}, "duration_ms": 1234, "summary": {...}}],
+  "summary": {"critical": 0, "high": 0, "medium": 3, "low": 1, "info": 2, "total": 6, "score": 87}
+}
+```
+
+Async response (`202 Accepted` — slow checks or async_mode):
 
 ```json
 {
@@ -41,8 +55,9 @@ Response (`202 Accepted`):
 |-------|------|----------|-------------|
 | `targets` | string[] | Yes | 1-10 domains or IPs |
 | `checks` | string[] | No | Check types to run (auto-detected from target type if omitted) |
+| `async_mode` | bool | No | Force 202 async even for fast checks (default: false) |
 | `auth` | object | No | [Auth credentials](checks/auth.md) to send to scan targets |
-| `webhook_url` | string | No | URL to receive results when scan completes |
+| `webhook_url` | string | No | URL to receive results when scan completes (forces async) |
 | `webhook_secret` | string | No | HMAC-SHA256 key for signing webhook payloads |
 
 **Auto-detection:** When `checks` is omitted, InfraProbe selects defaults based on target type:
@@ -61,7 +76,7 @@ Returns the full job with its current status (`pending`, `running`, `completed`,
 
 ### Single Check
 
-Run one check type against a single target. Fast checks (headers, ssl, dns, etc.) return results inline (`200`). Slow checks (ports, ports_deep, cve) return `202` with a job ID.
+Run one check type against a single target. Fast checks (headers, ssl, dns, ports, etc.) return results inline (`200`). Slow checks (ssl_deep, cve) return `202` with a job ID.
 
 ```bash
 # Fast check — returns 200 with results inline

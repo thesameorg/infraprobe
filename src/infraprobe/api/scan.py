@@ -121,10 +121,13 @@ async def _run_scanner(
         timeout,
         extra={"check": check_type, "target": target, "scanner_timeout": timeout},
     )
+    timeout_ms = int(timeout * 1000)
     try:
         result = await asyncio.wait_for(fn(target, timeout, auth), timeout=timeout + _SCHEDULING_BUFFER)
         duration_s = time.monotonic() - start
         duration_ms = int(duration_s * 1000)
+        result.duration_ms = duration_ms
+        result.timeout_ms = timeout_ms
         SCANNER_DURATION.labels(check=check_type).observe(duration_s)
         logger.info(
             "%s finished on %s in %dms — %d findings%s",
@@ -155,7 +158,12 @@ async def _run_scanner(
             timeout,
             extra={"check": check_type, "target": target, "duration_ms": duration_ms, "scanner_timeout": timeout},
         )
-        return CheckResult(check=check_type, error=f"Scanner {check_type} timed out after {timeout}s")
+        return CheckResult(
+            check=check_type,
+            error=f"Scanner {check_type} timed out after {timeout}s",
+            duration_ms=duration_ms,
+            timeout_ms=timeout_ms,
+        )
     except Exception as exc:
         duration_s = time.monotonic() - start
         duration_ms = int(duration_s * 1000)
@@ -181,10 +189,11 @@ async def _run_scanner(
         return CheckResult(check=check_type, error=f"Scanner {check_type} failed: {exc}")
 
 
-_DEEP_CHECKS = frozenset({"ssl_deep", "dns_deep", "blacklist_deep", "ports_deep", "cve"})
+# Use deep_scanner_timeout (30s) instead of scanner_timeout (10s)
+_DEEP_CHECKS = frozenset({"ssl_deep", "dns_deep", "blacklist_deep", "cve"})
 
-# Slow checks return 202 from /check/{type} (nmap-based, long-running)
-_SLOW_CHECKS = frozenset({CheckType.PORTS, CheckType.PORTS_DEEP, CheckType.CVE})
+# Async checks: return 202 from /check/{type} and /scan (too slow/unreliable for sync)
+_ASYNC_CHECKS = frozenset({CheckType.SSL_DEEP, CheckType.CVE})
 
 
 # ---------------------------------------------------------------------------
@@ -266,21 +275,20 @@ def _resolve_checks(targets: list[str], checks: list[CheckType] | None) -> list[
     return list(DOMAIN_CHECKS)
 
 
-async def _run_scan_with_validator(
-    targets: list[str],
+async def _run_scan_with_contexts(
+    contexts: list[ScanContext],
     checks: list[CheckType],
     auth: AuthConfig | None = None,
 ) -> ScanResponse:
-    """Shared orchestration: validate targets, run checks in parallel."""
-    contexts = await asyncio.gather(*[validate_target(raw) for raw in targets])
+    """Orchestrate scan given already-validated ScanContext objects (no re-resolution)."""
     check_names = [str(c) for c in checks]
     logger.info(
         "scan started: %d target(s) × %d checks [%s]",
-        len(targets),
+        len(contexts),
         len(checks),
         ", ".join(check_names),
         extra={
-            "targets": targets,
+            "targets": [str(ctx) for ctx in contexts],
             "checks": check_names,
             "resolved_ips": {str(ctx): list(ctx.resolved_ips) for ctx in contexts},
         },
@@ -297,15 +305,21 @@ async def _run_scan_with_validator(
     duration_ms = int((time.monotonic() - start) * 1000)
     logger.info(
         "scan done: %d target(s) in %dms",
-        len(targets),
+        len(contexts),
         duration_ms,
-        extra={"targets_count": len(targets), "duration_ms": duration_ms},
+        extra={"targets_count": len(contexts), "duration_ms": duration_ms},
     )
     return ScanResponse(results=list(target_results))
 
 
-async def _run_full_scan(request: ScanRequest) -> ScanResponse:
-    return await _run_scan_with_validator(request.targets, request.checks, request.auth)
+async def _run_scan_with_validator(
+    targets: list[str],
+    checks: list[CheckType],
+    auth: AuthConfig | None = None,
+) -> ScanResponse:
+    """Validate targets then run checks — used by async job path."""
+    contexts = await asyncio.gather(*[validate_target(raw) for raw in targets])
+    return await _run_scan_with_contexts(contexts, checks, auth)
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +359,7 @@ async def _run_scan_job(
 ) -> None:
     try:
         await store.update_status(job_id, JobStatus.RUNNING)
-        result = await _run_full_scan(request)
+        result = await _run_scan_with_validator(request.targets, request.checks, request.auth)
         await store.complete(job_id, result)
     except Exception as exc:
         logger.error(
@@ -372,22 +386,33 @@ async def _run_scan_job(
 
 
 # ---------------------------------------------------------------------------
-# POST /v1/scan — always async (202)
+# POST /v1/scan — sync (200) for fast checks, async (202) for slow checks
 # ---------------------------------------------------------------------------
 
 
-@router.post("/scan", status_code=202, response_model=JobCreate, tags=["Scans"])
-async def scan(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
+@router.post(
+    "/scan",
+    response_model=None,
+    tags=["Scans"],
+    summary="Run security scan",
+    description=(
+        "Submit a security scan for one or more targets. "
+        "Fast checks (headers, ssl, dns, tech, blacklist, whois, web) return **200** with inline results. "
+        "Slow checks (ssl_deep, cve) or `async_mode: true` return **202** with a job_id "
+        "for polling via `GET /v1/scan/{job_id}`. "
+        "Omit `checks` to auto-detect based on target type (domain vs IP)."
+    ),
+)
+async def scan(request: ScanRequest, req: Request) -> JSONResponse:
     if _shutting_down:
         return JSONResponse(status_code=503, content={"error": "shutting_down", "detail": "Server is shutting down"})
-
-    # Validate targets eagerly so 400/422 errors are returned before job creation
-    for raw in request.targets:
-        await validate_target(raw)
 
     # Resolve checks (auto-detect if None)
     resolved_checks = _resolve_checks(request.targets, request.checks)
     request = request.model_copy(update={"checks": resolved_checks})
+
+    # Validate all targets once — reuse contexts for sync path
+    contexts = await asyncio.gather(*[validate_target(raw) for raw in request.targets])
 
     # Validate webhook URL (SSRF protection)
     webhook_url = request.webhook_url
@@ -400,15 +425,28 @@ async def scan(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
         except ValueError as exc:
             raise InvalidTargetError(str(exc)) from exc
 
-    store: JobStore = req.app.state.job_store
-    job_id = uuid.uuid4().hex
-    job = await store.create(job_id, request)
+    # Decide sync vs async
+    force_async = request.async_mode or webhook_url is not None
+    has_async_checks = bool(set(resolved_checks) & _ASYNC_CHECKS)
 
-    task = asyncio.create_task(_run_scan_job(store, job_id, request, webhook_url, webhook_secret))
-    _background_tasks.add(task)
-    task.add_done_callback(_background_tasks.discard)
+    if has_async_checks or force_async:
+        # ASYNC path — 202 + job_id
+        store: JobStore = req.app.state.job_store
+        job_id = uuid.uuid4().hex
+        job = await store.create(job_id, request)
 
-    return JobCreate(job_id=job.job_id, status=job.status, created_at=job.created_at)
+        task = asyncio.create_task(_run_scan_job(store, job_id, request, webhook_url, webhook_secret))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+        return JSONResponse(
+            status_code=202,
+            content=JobCreate(job_id=job.job_id, status=job.status, created_at=job.created_at).model_dump(mode="json"),
+        )
+
+    # SYNC path — 200 inline
+    result = await _run_scan_with_contexts(contexts, resolved_checks, request.auth)
+    return JSONResponse(status_code=200, content=result.model_dump(mode="json"))
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +454,17 @@ async def scan(request: ScanRequest, req: Request) -> JobCreate | JSONResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/scan/{job_id}", response_model=None, tags=["Scans"])
+@router.get(
+    "/scan/{job_id}",
+    response_model=None,
+    tags=["Scans"],
+    summary="Get scan job status and results",
+    description=(
+        "Poll an async scan job by ID. Returns job status (`pending`, `running`, `completed`, `failed`) "
+        "and results when completed. Supports `?format=sarif|csv` for output format and "
+        "`?fail_on=high,critical` for CI/CD gating (returns 422 when matching findings exist)."
+    ),
+)
 async def get_scan_job(
     job_id: str,
     req: Request,
@@ -544,7 +592,7 @@ def _make_slow_check_handler(ct: CheckType):
 
 # Register a dedicated route per check type under /check/{type}
 for _ct in CheckType:
-    if _ct in _SLOW_CHECKS:
+    if _ct in _ASYNC_CHECKS:
         _handler = _make_slow_check_handler(_ct)
         router.add_api_route(f"/check/{_ct.value}", _handler, methods=["POST"], tags=["Checks"])
     else:

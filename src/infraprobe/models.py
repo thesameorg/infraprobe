@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TargetStr = Annotated[str, Field(max_length=2048)]
 
@@ -32,7 +32,6 @@ class CheckType(StrEnum):
     BLACKLIST_DEEP = "blacklist_deep"
     WEB = "web"
     PORTS = "ports"
-    PORTS_DEEP = "ports_deep"
     CVE = "cve"
     WHOIS = "whois"
 
@@ -71,6 +70,8 @@ class CheckResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+    duration_ms: int | None = None
+    timeout_ms: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -116,13 +117,26 @@ AuthConfig = Annotated[
 
 
 class SingleCheckRequest(BaseModel):
+    model_config = ConfigDict(json_schema_extra={"examples": [{"target": "example.com"}]})
+
     target: TargetStr
     auth: AuthConfig | None = Field(default=None, exclude=True)
 
 
 class ScanRequest(BaseModel):
+    model_config = ConfigDict(
+        json_schema_extra={
+            "examples": [
+                {"targets": ["example.com"], "checks": ["headers", "ssl", "dns"]},
+                {"targets": ["example.com", "google.com"]},
+                {"targets": ["example.com"], "checks": ["cve"], "async_mode": True},
+            ]
+        }
+    )
+
     targets: list[TargetStr] = Field(min_length=1, max_length=10)
     checks: list[CheckType] | None = None  # None = auto-detect based on target type
+    async_mode: bool = False  # Force 202 async even for sync-eligible checks
     webhook_url: Annotated[str, Field(max_length=2048)] | None = None
     webhook_secret: str | None = Field(default=None, exclude=True)
     auth: AuthConfig | None = Field(default=None, exclude=True)

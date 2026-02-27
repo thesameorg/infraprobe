@@ -66,7 +66,7 @@ curl -X POST https://your-instance/v1/scan \
 | ssl, ssl_deep | No | Direct TLS handshake, no HTTP layer |
 | dns, dns_deep | No | DNS protocol |
 | blacklist, blacklist_deep | No | DNSBL lookups |
-| ports, ports_deep | No | TCP scanning |
+| ports | No | TCP scanning |
 | cve | No | nmap + NVD API |
 | whois | No | WHOIS protocol |
 

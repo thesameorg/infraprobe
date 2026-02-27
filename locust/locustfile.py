@@ -228,7 +228,7 @@ class DeepContention(InfraProbeUser):
     def deep_with_ports(self):
         """Hits nmap_max_concurrent bottleneck."""
         self._scan(
-            {"targets": [random_domain()], "checks": ["ssl_deep", "dns_deep", "ports_deep"]},
+            {"targets": [random_domain()], "checks": ["ssl_deep", "dns_deep", "ports"]},
             "/v1/scan [1t deep+ports]",
         )
 

@@ -305,14 +305,23 @@ def test_scan_blacklist_deep(client):
 # --- /v1/ API prefix tests ---
 
 
-def test_v1_scan_works(client):
-    """/v1/scan (always async, 202) should accept a scan and return a job_id."""
+def test_v1_scan_sync_fast_checks(client):
+    """/v1/scan with fast-only checks returns 200 with inline ScanResponse."""
     resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "results" in body
+    result = body["results"][0]
+    assert result["results"]["headers"]["error"] is None
+
+
+def test_v1_scan_async_mode(client):
+    """/v1/scan with async_mode=True returns 202 even for fast checks."""
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
     assert resp.status_code == 202
     body = resp.json()
     assert "job_id" in body
 
-    # Poll until done and verify the result
     job = poll_until_done(client, body["job_id"])
     assert job["status"] == "completed"
     result = job["result"]["results"][0]
@@ -583,29 +592,11 @@ def test_check_ports_scanme(client):
     assert port_entry["state"] == "open"
 
 
-def test_check_ports_deep_scanme(client):
-    """Deep port scan of scanme.nmap.org — should include version info."""
-    result = submit_check(client, "ports_deep", {"target": "scanme.nmap.org"})
-
-    ports_result = result["results"]["ports_deep"]
-    assert ports_result["error"] is None
-
-    raw = ports_result["raw"]
-    assert "open_ports" in raw
-    assert "command_line" in raw
-    assert "-sV" in raw["command_line"]
-    # Deep scan of 1000 ports may hit host-timeout; if ports found, verify structure
-    if raw["open_count"] > 0:
-        port_entry = raw["open_ports"][0]
-        assert "product" in port_entry
-
-
 def test_ports_not_in_default_checks(client):
     """Ports check should NOT be in default checks (it's opt-in like web)."""
     data = submit_scan(client, {"targets": ["example.com"]})
     result = data["results"][0]
     assert "ports" not in result["results"]
-    assert "ports_deep" not in result["results"]
 
 
 def test_ports_in_bundle_scan(client):

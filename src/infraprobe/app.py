@@ -65,9 +65,16 @@ app = FastAPI(
     version=__version__,
     lifespan=lifespan,
     openapi_tags=[
-        {"name": "Scans", "description": "Bundle scan endpoints — always async. Submit scan, poll for results."},
-        {"name": "Checks", "description": "Individual check endpoints — fast checks inline, slow checks async."},
-        {"name": "Internal", "description": "Health probes and observability."},
+        {
+            "name": "Scans",
+            "description": "Bundle scan endpoints. Fast checks return 200 inline; "
+            "slow checks or async_mode return 202 with job_id for polling.",
+        },
+        {
+            "name": "Checks",
+            "description": "Individual check endpoints. Fast checks return 200 inline, "
+            "slow checks (ssl_deep, cve) return 202 async.",
+        },
     ],
 )
 
@@ -195,19 +202,18 @@ register_scanner(CheckType.SSL_DEEP, ssl_deep_scanner.scan)
 register_scanner(CheckType.DNS_DEEP, dns_deep.scan)
 register_scanner(CheckType.BLACKLIST_DEEP, blacklist.scan_deep)
 register_scanner(CheckType.PORTS, ports.scan)
-register_scanner(CheckType.PORTS_DEEP, ports.scan_deep)
 register_scanner(CheckType.CVE, cve.scan)
 
 # Register routes with /v1 prefix
 app.include_router(scan_router, prefix="/v1")
 
 
-@app.get("/health", tags=["Internal"])
+@app.get("/health", include_in_schema=False)
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/health/ready", tags=["Internal"])
+@app.get("/health/ready", include_in_schema=False)
 async def health_ready(request: Request) -> JSONResponse:
     """Readiness probe — checks that the job store is available."""
     store = request.app.state.job_store
@@ -218,7 +224,7 @@ async def health_ready(request: Request) -> JSONResponse:
     return JSONResponse(status_code=200, content={"status": "ready"})
 
 
-@app.get("/metrics", tags=["Internal"])
+@app.get("/metrics", include_in_schema=False)
 async def metrics() -> PlainTextResponse:
     """Prometheus metrics endpoint."""
     return PlainTextResponse(generate_latest(), media_type="text/plain; version=0.0.4; charset=utf-8")

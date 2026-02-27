@@ -1,4 +1,4 @@
-"""Shared test helpers for the new always-async scan API."""
+"""Shared test helpers for InfraProbe scan API (sync + async)."""
 
 import time
 
@@ -20,9 +20,14 @@ def poll_until_done(client: TestClient, job_id: str, timeout: float = 30) -> dic
 
 
 def submit_scan(client: TestClient, payload: dict, timeout: float = 30) -> dict:
-    """Submit POST /v1/scan and wait for completion. Returns ScanResponse dict."""
+    """Submit POST /v1/scan and wait for completion. Returns ScanResponse dict.
+
+    Handles both sync (200 → immediate ScanResponse) and async (202 → poll).
+    """
     resp = client.post("/v1/scan", json=payload)
-    assert resp.status_code == 202, f"Expected 202, got {resp.status_code}: {resp.text}"
+    if resp.status_code == 200:
+        return resp.json()  # Sync path — direct ScanResponse
+    assert resp.status_code == 202, f"Expected 200 or 202, got {resp.status_code}: {resp.text}"
     job = poll_until_done(client, resp.json()["job_id"], timeout)
     assert job["status"] == "completed", f"Scan failed: {job.get('error')}"
     return job["result"]

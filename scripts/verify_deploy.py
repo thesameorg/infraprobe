@@ -17,8 +17,8 @@ TEST_IP = "93.184.216.34"  # example.com
 
 # All check types (fast inline + slow async)
 FAST_CHECKS = ["ssl", "headers", "dns", "tech", "blacklist", "web", "whois",
-               "ssl_deep", "dns_deep", "blacklist_deep"]
-SLOW_CHECKS = ["ports", "ports_deep", "cve"]
+               "dns_deep", "blacklist_deep", "ports"]
+SLOW_CHECKS = ["ssl_deep", "cve"]
 DOMAIN_ONLY_CHECKS = {"dns", "dns_deep", "whois"}
 
 

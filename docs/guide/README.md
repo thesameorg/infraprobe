@@ -13,7 +13,7 @@ InfraProbe is an infrastructure security scanning API. Send it a domain or IP ad
 | [blacklist](checks/blacklist.md) | DNSBL spam/abuse lists | Yes | [blacklist_deep](checks/blacklist.md#deep-scan) |
 | [whois](checks/whois.md) | Domain registration & expiry | Yes (domains) | No |
 | [web](checks/web.md) | CORS, exposed paths, security.txt | Opt-in | No |
-| [ports](checks/ports.md) | Open port detection | Opt-in | [ports_deep](checks/ports.md#deep-scan) |
+| [ports](checks/ports.md) | Open port detection (top 20) | Opt-in | No |
 | [cve](checks/cve.md) | CVE vulnerability detection | Opt-in | No |
 
 **Default checks for domains:** headers, ssl, dns, tech, blacklist, whois

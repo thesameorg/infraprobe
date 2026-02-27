@@ -60,7 +60,7 @@ Info-level findings are positive signals (e.g., "Valid certificate", "TLS 1.3 su
 
 ### Deep scans are slow
 
-Deep scans use more thorough tools and have a 30-second timeout (vs 10 seconds for light scans). `ports_deep` scans 1000 ports (vs 20), and `cve` performs version detection plus NVD API lookups. This is expected behavior.
+Deep scans use more thorough tools and have a 30-second timeout (vs 10 seconds for light scans). `cve` performs version detection plus NVD API lookups, and `ssl_deep` runs full SSLyze analysis. This is expected behavior.
 
 ### Webhook not received
 
@@ -100,7 +100,7 @@ The default `memory` job store loses all jobs when the server restarts. Set `INF
 | Scan type | Timeout |
 |-----------|---------|
 | Light checks (headers, ssl, dns, tech, blacklist, whois, web, ports) | 10 seconds |
-| Deep checks (ssl_deep, dns_deep, blacklist_deep, ports_deep, cve) | 30 seconds |
+| Deep checks (ssl_deep, dns_deep, blacklist_deep, cve) | 30 seconds |
 
 These are per-scanner timeouts. A bundle scan runs all selected checks in parallel, so total wall-clock time is roughly the slowest individual check.
 

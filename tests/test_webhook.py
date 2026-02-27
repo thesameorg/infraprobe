@@ -121,7 +121,7 @@ def test_webhook_status_tracked_on_job(client: TestClient, httpserver: HTTPServe
 def test_no_webhook_when_url_not_provided(client: TestClient):
     resp = client.post(
         "/v1/scan",
-        json={"targets": ["example.com"], "checks": ["headers"]},
+        json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True},
     )
     assert resp.status_code == 202
     job_id = resp.json()["job_id"]

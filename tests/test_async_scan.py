@@ -2,9 +2,12 @@ import time
 
 from fastapi.testclient import TestClient
 
+from tests.helpers import submit_scan
+
 
 def test_async_scan_submit_returns_202(client: TestClient):
-    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    """Force async mode → always 202 regardless of check speed."""
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
     assert resp.status_code == 202
     body = resp.json()
     assert "job_id" in body
@@ -13,7 +16,7 @@ def test_async_scan_submit_returns_202(client: TestClient):
 
 
 def test_async_scan_poll_until_completed(client: TestClient):
-    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
     assert resp.status_code == 202
     job_id = resp.json()["job_id"]
 
@@ -36,7 +39,8 @@ def test_async_scan_poll_until_completed(client: TestClient):
 
 
 def test_async_scan_echoes_request(client: TestClient):
-    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+    resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True})
+    assert resp.status_code == 202
     job_id = resp.json()["job_id"]
 
     # Poll until done
@@ -52,6 +56,15 @@ def test_async_scan_echoes_request(client: TestClient):
     assert job is not None
     assert job["request"]["targets"] == ["example.com"]
     assert job["request"]["checks"] == ["headers"]
+    assert job["request"]["async_mode"] is True
+
+
+def test_sync_scan_returns_200_for_fast_checks(client: TestClient):
+    """Fast checks without async_mode → 200 with inline ScanResponse."""
+    result = submit_scan(client, {"targets": ["example.com"], "checks": ["headers"]})
+    assert "results" in result
+    assert len(result["results"]) == 1
+    assert "summary" in result
 
 
 def test_get_nonexistent_job_returns_404(client: TestClient):

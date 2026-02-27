@@ -48,7 +48,6 @@ from infraprobe.scanners.blacklist import scan_deep as blacklist_deep_scan  # no
 from infraprobe.scanners.web import scan as web_scan  # noqa: E402
 from infraprobe.scanners.whois_scanner import scan as whois_scan  # noqa: E402
 from infraprobe.scanners.ports import scan as ports_scan  # noqa: E402
-from infraprobe.scanners.ports import scan_deep as ports_deep_scan  # noqa: E402
 from infraprobe.scanners.cve import scan as cve_scan  # noqa: E402
 from infraprobe.scanners.deep.ssl import scan as ssl_deep_scan  # noqa: E402
 from infraprobe.scanners.deep.dns import scan as dns_deep_scan  # noqa: E402
@@ -130,8 +129,6 @@ SCANNERS: list[ScannerSpec] = [
 
     # --- LONG: nmap-based, genuinely slow ---
     ScannerSpec("ports", CheckType.PORTS, ports_scan,
-                use_domains=False, use_ips=True, use_nmap_targets=True, phase="long"),
-    ScannerSpec("ports_deep", CheckType.PORTS_DEEP, ports_deep_scan,
                 use_domains=False, use_ips=True, use_nmap_targets=True, phase="long"),
     ScannerSpec("cve", CheckType.CVE, cve_scan,
                 use_domains=False, use_ips=True, use_nmap_targets=True, phase="long"),

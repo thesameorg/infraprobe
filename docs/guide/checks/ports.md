@@ -2,19 +2,15 @@
 
 Scans for open TCP ports and classifies them by security risk using nmap.
 
-- **Check type:** `ports` (light), `ports_deep` (deep)
-- **Endpoint:** `POST /v1/check/ports` or `POST /v1/check/ports_deep`
+- **Check type:** `ports`
+- **Endpoint:** `POST /v1/check/ports`
 - **Default:** Opt-in (not included in default scans)
 
 ## What Is Checked
 
-### Light scan
-
 Scans the **top 20** most common TCP ports using nmap. Identifies open ports and their services.
 
-### Deep scan
-
-Scans the **top 1000** TCP ports with service version detection (`-sV`). Identifies open ports, running services, and their versions. Version information is also used by the [CVE check](cve.md) to find known vulnerabilities.
+For service version detection and CVE vulnerability lookups, use the [CVE check](cve.md) which performs its own nmap version scan (`-sV`) plus NVD API lookups.
 
 ## Understanding Findings
 
@@ -38,8 +34,6 @@ Services like databases (Redis, MongoDB, Elasticsearch) and remote access tools 
 | `open_ports` | List of open ports, each with `port`, `protocol`, `service`, `state`, `product`, and `version` |
 | `open_count` | Total number of open ports found |
 | `command_line` | nmap command that was executed |
-
-The `product` and `version` fields are populated in deep scans. In light scans, these may be empty.
 
 ---
 

@@ -1,4 +1,4 @@
-"""Port scanner powered by python-nmap — light (top-20) and deep (top-1000 + version detection)."""
+"""Port scanner powered by python-nmap — top-20 ports, TCP connect, no version detection."""
 
 from __future__ import annotations
 
@@ -179,7 +179,8 @@ def _run_nmap(host: str, arguments: str) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-async def _run_scan(check_type: CheckType, target: str, timeout: float, deep: bool) -> CheckResult:
+async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
+    """Port scan — top 20 ports, TCP connect, no version detection."""
     try:
         host = parse_target(target).host
 
@@ -188,14 +189,10 @@ async def _run_scan(check_type: CheckType, target: str, timeout: float, deep: bo
             ctx = await validate_target(target)
             nmap_host = ctx.resolved_ips[0] if ctx.resolved_ips else host
         except (BlockedTargetError, InvalidTargetError) as exc:
-            return CheckResult(check=check_type, error=f"Target validation failed: {exc}")
+            return CheckResult(check=CheckType.PORTS, error=f"Target validation failed: {exc}")
 
         host_timeout = max(1, int(timeout - 1))
-        args = f"-sT -T4 -Pn --host-timeout {host_timeout}s"
-        if deep:
-            args += " --top-ports 1000 -sV"
-        else:
-            args += " --top-ports 20"
+        args = f"-sT -T4 -Pn --host-timeout {host_timeout}s --top-ports 20"
 
         async with nmap_semaphore():
             raw = await asyncio.to_thread(_run_nmap, nmap_host, args)
@@ -223,21 +220,11 @@ async def _run_scan(check_type: CheckType, target: str, timeout: float, deep: bo
                 Finding(
                     severity=Severity.INFO,
                     title="No open ports found",
-                    description=f"No open ports detected among the top {'1000' if deep else '20'} common ports.",
+                    description="No open ports detected among the top 20 common ports.",
                 )
             )
 
-        return CheckResult(check=check_type, findings=findings, raw=raw)
+        return CheckResult(check=CheckType.PORTS, findings=findings, raw=raw)
 
     except Exception as exc:
-        return CheckResult(check=check_type, error=f"Port scan failed: {exc}")
-
-
-async def scan(target: str, timeout: float = 10.0, auth=None) -> CheckResult:
-    """Light port scan — top 20 ports, TCP connect, no version detection."""
-    return await _run_scan(CheckType.PORTS, target, timeout, deep=False)
-
-
-async def scan_deep(target: str, timeout: float = 30.0, auth=None) -> CheckResult:
-    """Deep port scan — top 1000 ports, TCP connect, with version detection."""
-    return await _run_scan(CheckType.PORTS_DEEP, target, timeout, deep=True)
+        return CheckResult(check=CheckType.PORTS, error=f"Port scan failed: {exc}")

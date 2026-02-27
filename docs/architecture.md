@@ -8,8 +8,8 @@ Technical architecture for InfraProbe. Covers system design, component structure
 
 InfraProbe is an HTTP API that runs security checks against infrastructure targets. Three endpoint styles exist under `/v1`:
 
-- **`POST /v1/scan`** — bundle endpoint. Always async (202). Accepts one or more targets, auto-detects or accepts explicit check types, runs all checks concurrently in the background. Poll via `GET /v1/scan/{job_id}` for results.
-- **`POST /v1/check/{type}`** — single check per endpoint (e.g. `/v1/check/headers`, `/v1/check/ssl_deep`). Fast checks return 200 inline; slow checks (ports, ports_deep, cve) return 202 with a job ID.
+- **`POST /v1/scan`** — bundle endpoint. Fast checks return 200 inline; slow checks (ssl_deep, cve) or `async_mode: true` return 202 with job_id for polling via `GET /v1/scan/{job_id}`. Accepts one or more targets, auto-detects or accepts explicit check types, runs all checks concurrently.
+- **`POST /v1/check/{type}`** — single check per endpoint (e.g. `/v1/check/headers`, `/v1/check/ssl_deep`). Fast checks return 200 inline; slow checks (ssl_deep, cve) return 202 with a job ID.
 - **`GET /v1/scan/{job_id}`** — poll for job status and results. Supports `?format=` and `?fail_on=` query parameters on completed jobs.
 
 Background jobs use a `JobStore` — `MemoryJobStore` for development, `FirestoreJobStore` for production (survives Cloud Run scale-to-zero). Backend selected via `INFRAPROBE_JOB_STORE_BACKEND`. No unversioned routes — all access goes through `/v1`.
@@ -110,20 +110,21 @@ Lifespan manages graceful shutdown: `drain_background_tasks(timeout=25)` waits f
 
 Owns the full lifecycle of a scan request. Serves three endpoint styles:
 
-**Bundle (`POST /scan` — always 202):**
+**Bundle (`POST /scan` — 200 sync or 202 async):**
 1. Validate and parse `ScanRequest` (Pydantic)
 2. Resolve checks: auto-detect from target type if `checks` is omitted, validate DNS-only checks against IP targets
 3. Validate each target through `blocklist.validate_target()` — rejects private IPs (SSRF protection) and unresolvable domains
-4. Create a job in the `JobStore`, spawn a background task via `asyncio.create_task`
-5. Background task fans out: `asyncio.gather` over targets, then `asyncio.gather` over checks per target
-6. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + SCHEDULING_BUFFER)` — the single timeout enforcement point
+4. Decide sync vs async: fast checks only → 200 inline; slow checks (ssl_deep, cve) or `async_mode`/`webhook_url` → 202
+5. Async path: create job in `JobStore`, spawn background task via `asyncio.create_task`
+6. Background task fans out: `asyncio.gather` over targets, then `asyncio.gather` over checks per target
+7. Each check runs through `_run_scanner()`, which wraps the scanner call in `asyncio.wait_for(fn, timeout=budget + SCHEDULING_BUFFER)` — the single timeout enforcement point
 
 **Individual fast checks (`POST /check/{type}` — 200 inline):**
 1. Validate and parse `SingleCheckRequest` (single target)
 2. Same target validation and scanner dispatch as bundle, but runs one check type
 3. Returns `TargetResult` directly (not wrapped in `ScanResponse`)
 
-**Individual slow checks (`POST /check/{type}` for ports, ports_deep, cve — 202 async):**
+**Individual slow checks (`POST /check/{type}` for ssl_deep, cve — 202 async):**
 1. Same validation as fast checks
 2. Creates a job and background task, returns 202 with job ID
 
@@ -205,9 +206,9 @@ Finding                        Job
                                 └── error: str | None
 ```
 
-Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, blacklist, blacklist_deep, web, whois, ports, ports_deep, cve).
+Enums: `Severity` (critical, high, medium, low, info), `CheckType` (ssl, ssl_deep, headers, dns, dns_deep, tech, blacklist, blacklist_deep, web, whois, ports, cve).
 
-`POST /v1/scan` uses `ScanRequest` → `JobCreate` (202), poll via `GET /v1/scan/{job_id}` → `Job` with `ScanResponse` result. `POST /v1/check/{type}` uses `SingleCheckRequest` → `TargetResult` (200 fast) or `JobCreate` (202 slow).
+`POST /v1/scan` uses `ScanRequest` → `ScanResponse` (200 for fast checks) or `JobCreate` (202 for slow/async). Poll via `GET /v1/scan/{job_id}` → `Job` with `ScanResponse` result. `POST /v1/check/{type}` uses `SingleCheckRequest` → `TargetResult` (200 fast) or `JobCreate` (202 slow).
 
 `CheckResult.error` is the discriminator: if null, `findings` and `raw` are valid. If set, the scanner failed and `findings` is empty.
 
@@ -323,7 +324,7 @@ Local dev: `docker-compose.yaml` maps host port 8000 to container port 8080. Opt
 
 **Deployment verification:** `scripts/verify_deploy.py` tests all endpoints against a live instance — health, every scanner (fast inline + slow async), bundle scan (submit → poll), target auto-detection, output formats (JSON, SARIF, CSV), error handling (SSRF block, validation), and auth enforcement. Reads URL and secret from `.envs/` by default; also supports `uv run python scripts/verify_deploy.py http://localhost:8080` for local dev.
 
-**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `blacklist`, `blacklist_deep`, `web`, `whois`, `ports`, `ports_deep`, `cve` — all registered and accessible via bundle and individual endpoints. `web`, `ports`, `ports_deep`, and `cve` are opt-in (not in default checks).
+**Implemented scanners:** `headers`, `ssl`, `ssl_deep`, `dns`, `dns_deep`, `tech`, `blacklist`, `blacklist_deep`, `web`, `whois`, `ports`, `cve` — all registered and accessible via bundle and individual endpoints. `web`, `ports`, and `cve` are opt-in (not in default checks).
 
 **Deferred (YAGNI):** retry logic, circuit breakers, connection pooling, caching, rate limiting. Add when there's a concrete need. See `docs/check_approach.md` for the full list.
 

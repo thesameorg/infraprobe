@@ -61,7 +61,7 @@
   },
 
   "nmap_subset": {
-    "_description": "Small set for slow nmap-based checks (ports, ports_deep, cve)",
+    "_description": "Small set for slow nmap-based checks (ports, cve)",
     "targets": [
       {"target": "scanme.nmap.org", "note": "Nmap official scan-me"},
       {"target": "testphp.vulnweb.com", "note": "Acunetix vuln test app"},

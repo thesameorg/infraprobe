@@ -6,8 +6,8 @@ Infrastructure security scanning API. Accepts target domains/IPs, runs security 
 
 Three endpoint styles, all under `/v1`:
 
-- **`POST /v1/scan`** — bundle endpoint, always async (202). Accepts 1-10 targets, runs selected checks concurrently. Poll `GET /v1/scan/{job_id}` for results.
-- **`POST /v1/check/{type}`** — individual check endpoints (e.g. `/v1/check/headers`). Fast checks return 200 inline; slow checks (ports, ports_deep, cve) return 202.
+- **`POST /v1/scan`** — bundle endpoint. Fast checks return 200 inline; slow checks (ssl_deep, cve) or `async_mode` return 202 with job_id. Poll `GET /v1/scan/{job_id}` for results.
+- **`POST /v1/check/{type}`** — individual check endpoints (e.g. `/v1/check/headers`). Fast checks return 200 inline; slow checks (ssl_deep, cve) return 202.
 - **`GET /v1/scan/{job_id}`** — poll for job status and results. Supports `?format=sarif|csv` and `?fail_on=high,critical`.
 
 | Check | Description | Default |
@@ -19,7 +19,7 @@ Three endpoint styles, all under `/v1`:
 | `blacklist` / `blacklist_deep` | DNSBL checking (2 zones / 15 zones) | Yes / opt-in |
 | `whois` | Domain registration and expiry | Yes (domains) |
 | `web` | CORS, exposed paths, mixed content, security.txt | Opt-in |
-| `ports` / `ports_deep` | Port scanning — nmap top-20 / top-1000 + version detection | Opt-in |
+| `ports` | Port scanning — nmap top-20 | Opt-in |
 | `cve` | CVE detection — nmap version detection + NVD API | Opt-in |
 
 ## Quick start

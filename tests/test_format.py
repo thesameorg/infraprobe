@@ -190,8 +190,10 @@ class TestFormatQueryParam:
         assert "results" in resp.json()
 
     def test_sarif_format_on_scan(self, client):
-        """Submit scan, poll until done, then GET /v1/scan/{job_id}?format=sarif."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        """Submit scan (async), poll until done, then GET /v1/scan/{job_id}?format=sarif."""
+        resp = client.post(
+            "/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True}
+        )
         assert resp.status_code == 202
         job_id = resp.json()["job_id"]
         poll_until_done(client, job_id)
@@ -346,8 +348,10 @@ class TestCsvFormatQueryParam:
     """Test ?format=csv query parameter on live endpoints."""
 
     def test_csv_format_on_scan(self, client):
-        """Submit scan, poll until done, then GET /v1/scan/{job_id}?format=csv."""
-        resp = client.post("/v1/scan", json={"targets": ["example.com"], "checks": ["headers"]})
+        """Submit scan (async), poll until done, then GET /v1/scan/{job_id}?format=csv."""
+        resp = client.post(
+            "/v1/scan", json={"targets": ["example.com"], "checks": ["headers"], "async_mode": True}
+        )
         assert resp.status_code == 202
         job_id = resp.json()["job_id"]
         poll_until_done(client, job_id)
